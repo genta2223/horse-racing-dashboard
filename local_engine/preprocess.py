@@ -65,11 +65,17 @@ def process_features(df):
     }
     current_features = []
     for alias, original in feature_mapping.items():
-        if original in df.columns:
             df[alias] = df[original].apply(clean_numeric)
             current_features.append(alias)
+
+    # 7. V3 New Feature: Odds Divergence Proxy (Odds / Popularity)
+    # Added 2026-02-06
+    if '単勝オッズ' in df.columns and '人気' in df.columns:
+        # Avoid zero division if Popularity is 0 (unlikely but safe)
+        df['Odds_per_Pop'] = df['単勝オッズ'] / (df['人気'] + 0.0001)
+        current_features.append('Odds_per_Pop')
     
-    # 7. Define Final Feature Set
+    # 8. Define Final Feature Set
     feature_cols = ['Prev_PCI', 'Prev_3F', 'Prev_Rank'] + current_features
     
     return df, feature_cols
