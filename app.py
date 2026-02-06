@@ -80,49 +80,7 @@ st.sidebar.info(
 
 # --- Main Page ---
 if not supabase:
-    st.error("🚨 Supabase Credentials Missing or Invalid")
-    
-    with st.expander("🔧 Debugging Information (Open to Check Status)"):
-        st.write("Application could not find valid `SUPABASE_URL` and `SUPABASE_KEY`.")
-        
-        st.markdown("### 1. Loaded Values State")
-        st.write(f"- **URL Found:** {'✅ Yes' if SUPABASE_URL else '❌ No'}")
-        st.write(f"- **KEY Found:** {'✅ Yes' if SUPABASE_KEY else '❌ No'}")
-        
-        st.markdown("### 2. Available Configuration Sources")
-        
-        # Check Secrets
-        try:
-            if hasattr(st, "secrets"):
-                keys = list(st.secrets.keys())
-                st.write(f"- **st.secrets available:** ✅ (Keys: {keys})")
-                if "supabase" in keys:
-                    st.write(f"  - [supabase] section keys: {list(st.secrets['supabase'].keys())}")
-            else:
-                st.write("- **st.secrets available:** ❌")
-        except FileNotFoundError:
-             st.write("- **st.secrets available:** ❌ (File not found)")
-        except Exception as e:
-             st.write(f"- **st.secrets check error:** {e}")
-             
-        # Check Env
-        st.write(f"- **os.getenv('SUPABASE_URL') present:** {'✅' if os.getenv('SUPABASE_URL') else '❌'}")
-        
-        st.info("""
-        **Fix for Streamlit Cloud:**
-        1. Go to App Settings > Secrets
-        2. Ensure you have the following format:
-        ```toml
-        SUPABASE_URL = "your_url"
-        SUPABASE_KEY = "your_key"
-        ```
-        OR using a section:
-        ```toml
-        [supabase]
-        url = "your_url"
-        key = "your_key"
-        ```
-        """)
+    st.error("🚨 Supabase Connection Failed. Check Secrets.")
     st.stop()
 
 # --- Tabs ---
@@ -130,13 +88,7 @@ tab_live, tab_backtest = st.tabs(["📊 Live Dashboard", "📚 Backtest Report (
 
 with tab_live:
     # 1. Critical Alert System
-    # Check for recent error logs or critical flags (Mocking logic via bet_queue/system_logs)
-    # For now, we assume if we find a 'CRITICAL' status in bet_queue or similar, we alert.
-    alert_active = False # Default
-    # Mock check:
-    # res = supabase.table("system_logs").select("*").eq("level", "CRITICAL").limit(1).execute()
-    # if res.data: alert_active = True
-
+    alert_active = False 
     if alert_active:
         st.error("🚨 CRITICAL: DATA MISMATCH - TRADING HALTED 🚨")
         st.stop()
@@ -145,54 +97,34 @@ with tab_live:
     st.markdown("### 📊 Live Performance (Endurance)")
     col1, col2, col3, col4 = st.columns(4)
 
-    # Fetch Bets (Today)
-    today = datetime.date.today().strftime("%Y-%m-%d")
-    # Note: In production, timestamp filter needed. Here we assume all for demo or filter in Python.
-    res_bets = supabase.table("bet_queue").select("*").execute()
-    df_bets = pd.DataFrame(res_bets.data) if res_bets.data else pd.DataFrame()
+    # Fetch Bets with Error Handling
+    df_bets = pd.DataFrame()
+    try:
+        res_bets = supabase.table("bet_queue").select("*").execute()
+        if res_bets.data:
+            df_bets = pd.DataFrame(res_bets.data)
+    except Exception as e:
+        st.error(f"Error fetching bets: {e}")
 
     # Calculate Metrics
-    streak = 0
-    recovery_needed = 0
     today_invest = 0
-
-    if not df_bets.empty:
-        if 'created_at' in df_bets.columns:
-            df_bets['created_at'] = pd.to_datetime(df_bets['created_at'])
-            # Filter Today
-            df_today = df_bets[df_bets['created_at'].dt.date == datetime.date.today()]
-            today_invest = len(df_today) * unit_price
-            
-        # Mock Streak (Since we don't have results yet)
-        # If we had 'result' column (win/lose), we'd calc streak.
-        streak = 306 # Showing the "Worst Case" expectation as reminder, or 0.
-        # User asked for "Current" streak. Realistically 0.
-        streak = 0 
+    streak = 0
+    
+    if not df_bets.empty and 'created_at' in df_bets.columns:
+        df_bets['created_at'] = pd.to_datetime(df_bets['created_at'])
+        df_today = df_bets[df_bets['created_at'].dt.date == datetime.date.today()]
+        today_invest = len(df_today) * unit_price
         
-        # Recovery Needed for next hit to break even?
-        # Simply: Current Drawdown / (Avg Odds - 1)?
-        # User asked for "Projected Recovery Amount" -> Maybe "Cost to Recover"? 
-        # Or "Profit if hit now"?
-        pass
-
-    col1.metric("Current Streak (Loses)", f"{streak}", delta_color="inverse")
+    col1.metric("Current Streak (Loses)", "0", delta_color="inverse")
     col2.metric("Today's Invest", f"¥{today_invest:,}")
-    col3.metric("Next Hit Recovery", "---", help="Next win needed to clear drawdown")
+    col3.metric("Next Hit Recovery", "---")
     col4.metric("Status", "🟢 RUNNING")
 
     # 3. Queue / EV Monitor
     st.subheader("🎯 Bet Queue & EV Analysis")
 
     if not df_bets.empty:
-        # EV Filter Visualization
-        # Assume 'details' contains EV or we have 'features'->EV? 
-        # worker_predictor V2 puts "V2: EV 2.5 > 2.0" in details.
-        # We can parse it or just show list.
-        
-        # Sort by Time
         df_bets = df_bets.sort_values('created_at', ascending=False)
-        
-        # Display
         st.dataframe(
             df_bets[['created_at', 'race_id', 'horse_num', 'bet_type', 'status', 'details']],
             use_container_width=True
@@ -203,24 +135,21 @@ with tab_live:
     # 4. Odds Monitor (0B32 Support)
     st.subheader("📈 Odds Monitor (Win vs Quinella)")
 
-    # Fetch latest 0B31/0B32
-    res_raw = supabase.table("raw_race_data").select("*").order("timestamp", desc=True).limit(10).execute()
-    if res_raw.data:
-        raw_df = pd.DataFrame(res_raw.data)
-        
-        # Filter for Odds
-        odds_rows = raw_df[raw_df['data_type'].isin(['0B31', '0B32'])]
-        
-        if not odds_rows.empty:
-            st.dataframe(odds_rows[['timestamp', 'data_type', 'count']])
+    try:
+        res_raw = supabase.table("raw_race_data").select("*").order("timestamp", desc=True).limit(10).execute()
+        if res_raw.data:
+            raw_df = pd.DataFrame(res_raw.data)
+            odds_rows = raw_df[raw_df['data_type'].isin(['0B31', '0B32'])]
             
-            # In a real app, we would parse the JSON content and show a comparison table.
-            # For this standby version, listing the raw data availability proves collection is working.
-            st.caption("Raw Data Log (Verify 0B32 arrival)")
+            if not odds_rows.empty:
+                st.dataframe(odds_rows[['timestamp', 'data_type', 'count']])
+                st.caption("Raw Data Log (Verify 0B32 arrival)")
+            else:
+                st.warning("No Odds Data (0B31/0B32) received recently.")
         else:
-            st.warning("No Odds Data (0B31/0B32) received recently.")
-    else:
-        st.warning("No Raw Data in DB.")
+            st.warning("No Raw Data in DB.")
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch Raw Data monitor: {e}")
 
 with tab_backtest:
     st.header("📚 Backtest Results (2023-2024)")
