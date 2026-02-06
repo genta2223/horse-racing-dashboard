@@ -186,41 +186,54 @@ with tab_backtest:
         st.warning(f"Backtest CSV not found: {csv_path}")
 
 with tab_compound:
-    st.header("📈 Compound Simulation (2023-2025)")
+    st.header("📈 Compound Simulation Comparison (V2 vs V3)")
     st.markdown("""
-    **Strategy**: Asset-Linked Slide Method
-    - **Initial**: ¥100,000
-    - **Unit**: +¥100 per +¥100k Asset
-    - **Logic**: Hybrid EV 2.0 (EV > 2.0)
+    **Strategy**: Asset-Linked Slide Method (Stepwise)
+    - **Initial**: ¥100,000 | **Unit**: +¥100 per +¥100k
+    - **Red Line (V2)**: Old Model (Failed in 2025)
+    - **Blue Line (V3)**: New Model (2025 Adaptive + Odds Divergence)
     """)
     
-    comp_csv = "compound_simulation_2023_2025.csv"
-    if os.path.exists(comp_csv):
-        df_comp = pd.read_csv(comp_csv)
+    csv_v2 = "compound_simulation_2023_2025.csv"
+    csv_v3 = "compound_simulation_2023_2025_v3.csv"
+    
+    if os.path.exists(csv_v2) and os.path.exists(csv_v3):
+        df_v2 = pd.read_csv(csv_v2)
+        df_v3 = pd.read_csv(csv_v3)
         
-        # Metrics
-        initial_bal = 100000
-        final_bal = df_comp['current_balance'].iloc[-1]
-        peak_bal = df_comp['current_balance'].max()
-        max_unit = df_comp['unit_price'].max()
-        roi_comp = ((final_bal - initial_bal) / initial_bal) * 100
+        # Preprocess
+        df_v2['date'] = pd.to_datetime(df_v2['date'])
+        df_v3['date'] = pd.to_datetime(df_v3['date'])
         
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Final Balance", f"¥{final_bal:,.0f}", delta=f"{roi_comp:.1f}%")
-        c2.metric("Peak Balance", f"¥{peak_bal:,.0f}")
-        c3.metric("Max Unit Price", f"¥{max_unit:,}")
-        c4.metric("Days Simulated", len(df_comp))
+        # Metrics Comparison
+        m_v2 = df_v2['current_balance'].iloc[-1]
+        m_v3 = df_v3['current_balance'].iloc[-1]
         
+        # 2025 Performance (Approx)
+        mask_2025 = df_v3['date'].dt.year == 2025
+        profit_2025_v3 = df_v3[mask_2025]['daily_profit'].sum()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Final Balance (V3)", f"¥{m_v3:,.0f}", delta=f"vs V2: ¥{m_v3-m_v2:,.0f}")
+        c2.metric("2025 Net Profit (V3)", f"¥{profit_2025_v3:,.0f}", delta="V3 Recovery")
+        c3.metric("Peak Balance (V3)", f"¥{df_v3['current_balance'].max():,.0f}")
+
         # Chart
-        st.subheader("Asset Curve (2023-2025)")
-        st.line_chart(df_comp[['date', 'current_balance']].set_index('date'))
+        st.subheader("Asset Curve Comparison")
+        chart_data = pd.DataFrame({
+            'Date': df_v3['date'],
+            'V2 (Old)': df_v2.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values,
+            'V3 (New)': df_v3['current_balance'].values
+        }).set_index('Date')
+        st.line_chart(chart_data)
         
         # Data
-        st.subheader("Daily Log")
-        st.dataframe(df_comp)
+        with st.expander("View Daily Log (V3)"):
+            st.dataframe(df_v3)
+            
     else:
-        st.warning(f"Simulation CSV not found: {comp_csv}")
+        st.warning(f"Sim files not found. V2: {os.path.exists(csv_v2)}, V3: {os.path.exists(csv_v3)}")
 
 # Footer
 st.markdown("---")
-st.caption("Hybrid EV 2.0 Engine | Powered by active-learning-agent")
+st.caption("Hybrid EV 3.0 Engine | Powered by active-learning-agent")
