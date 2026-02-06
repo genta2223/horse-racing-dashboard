@@ -259,43 +259,13 @@ with tab_monitor:
     else:
         st.warning(f"Trade Log ({log_file}) not found. Run V4 simulation first.")
 
-with tab_backtest:
-    st.header("📚 Backtest Results (2023-2024)")
-    st.markdown("Strategy: **Hybrid EV 2.0** (EV > 2.0, Fixed ¥1,000)")
-    
-    csv_path = "backtest_2023_2024_v2.csv"
-    if os.path.exists(csv_path):
-        df_bt = pd.read_csv(csv_path)
-        
-        # KPIs
-        total_profit = df_bt['cumulative_profit'].iloc[-1]
-        hit_rate = (df_bt['result'] == 1).mean() * 100
-        total_bets = len(df_bt)
-        max_dd = df_bt['drawdown'].min()
-        roi = (df_bt['payout'].sum() / (total_bets * 1000)) * 100
-        
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Net Profit", f"¥{total_profit:,.0f}")
-        kpi2.metric("Hit Rate", f"{hit_rate:.2f}%")
-        kpi3.metric("ROI", f"{roi:.1f}%")
-        kpi4.metric("Max Drawdown", f"¥{max_dd:,.0f}")
-        
-        # Chart
-        st.subheader("Equity Curve")
-        st.line_chart(df_bt[['date', 'cumulative_profit']].set_index('date'))
-        
-        # Data
-        st.subheader("Trade Log")
-        st.dataframe(df_bt)
-    else:
-        st.warning(f"Backtest CSV not found: {csv_path}")
-
 with tab_compound:
-    st.header("📈 Compound Simulation Comparison (V2 vs V3 vs V4)")
+    st.header("📈 Compound Simulation Comparison (V2 vs V3 vs V4 vs V4.1)")
     st.markdown("""
     **Strategy**: Asset-Linked Slide Method (Stepwise)
     - **Initial**: ¥100,000 | **Unit**: +¥100 per +¥100k
-    - **Red (V2)**: Old Model (Failed) | **Blue (V3)**: V3 Adaptive | **Green (V4)**: Hybrid (Single+Wide)
+    - **Red (V2)**: Old Model (Failed) | **Blue (V3)**: V3 Adaptive 
+    - **Green (V4)**: Hybrid (Single+Wide) | **Purple (V4.1)**: Relaxed Wide (Shield)
     """)
     
     csv_v2 = "compound_simulation_2023_2025.csv"
