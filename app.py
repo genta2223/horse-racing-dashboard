@@ -10,21 +10,55 @@ from supabase import create_client
 st.set_page_config(page_title="Hybrid EV 2.0 Dashboard", layout="wide", page_icon="🏇")
 load_dotenv()
 
-# Supabase Connection
-# Try st.secrets first (Streamlit Cloud), then os.getenv (Local)
-try:
-    SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
-except FileNotFoundError:
-    # Local run without .streamlit/secrets.toml
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Supabase Connection Strategy
+# 1. Try st.secrets (Streamlit Cloud)
+# 2. Try os.getenv (Local .env via python-dotenv)
+
+SUPABASE_URL = None
+SUPABASE_KEY = None
+
+# Helper to look for keys case-insensitively or in commonly used sections
+def find_credentials():
+    url, key = None, None
+    
+    # A. Check Streamlit Secrets
+    try:
+        # 1. Root level
+        if "SUPABASE_URL" in st.secrets:
+            url = st.secrets["SUPABASE_URL"]
+        if "SUPABASE_KEY" in st.secrets:
+            key = st.secrets["SUPABASE_KEY"]
+            
+        # 2. Nested [supabase] section (common pattern)
+        if not url and "supabase" in st.secrets:
+            section = st.secrets["supabase"]
+            url = section.get("url") or section.get("URL") or section.get("SUPABASE_URL")
+            key = section.get("key") or section.get("KEY") or section.get("SUPABASE_KEY")
+            
+    except FileNotFoundError:
+        pass # No secrets.toml locally
+    except Exception:
+        pass # Other secrets errors
+
+    # B. Check Environment Variables (Fallback)
+    if not url:
+        url = os.getenv("SUPABASE_URL")
+    if not key:
+        key = os.getenv("SUPABASE_KEY")
+        
+    return url, key
+
+SUPABASE_URL, SUPABASE_KEY = find_credentials()
 
 @st.cache_resource
 def init_connection():
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        st.error(f"Connection Error: {e}")
+        return None
 
 supabase = init_connection()
 
@@ -46,7 +80,49 @@ st.sidebar.info(
 
 # --- Main Page ---
 if not supabase:
-    st.error("Supabase Credentials Missing in .env")
+    st.error("🚨 Supabase Credentials Missing or Invalid")
+    
+    with st.expander("🔧 Debugging Information (Open to Check Status)"):
+        st.write("Application could not find valid `SUPABASE_URL` and `SUPABASE_KEY`.")
+        
+        st.markdown("### 1. Loaded Values State")
+        st.write(f"- **URL Found:** {'✅ Yes' if SUPABASE_URL else '❌ No'}")
+        st.write(f"- **KEY Found:** {'✅ Yes' if SUPABASE_KEY else '❌ No'}")
+        
+        st.markdown("### 2. Available Configuration Sources")
+        
+        # Check Secrets
+        try:
+            if hasattr(st, "secrets"):
+                keys = list(st.secrets.keys())
+                st.write(f"- **st.secrets available:** ✅ (Keys: {keys})")
+                if "supabase" in keys:
+                    st.write(f"  - [supabase] section keys: {list(st.secrets['supabase'].keys())}")
+            else:
+                st.write("- **st.secrets available:** ❌")
+        except FileNotFoundError:
+             st.write("- **st.secrets available:** ❌ (File not found)")
+        except Exception as e:
+             st.write(f"- **st.secrets check error:** {e}")
+             
+        # Check Env
+        st.write(f"- **os.getenv('SUPABASE_URL') present:** {'✅' if os.getenv('SUPABASE_URL') else '❌'}")
+        
+        st.info("""
+        **Fix for Streamlit Cloud:**
+        1. Go to App Settings > Secrets
+        2. Ensure you have the following format:
+        ```toml
+        SUPABASE_URL = "your_url"
+        SUPABASE_KEY = "your_key"
+        ```
+        OR using a section:
+        ```toml
+        [supabase]
+        url = "your_url"
+        key = "your_key"
+        ```
+        """)
     st.stop()
 
 # --- Tabs ---
