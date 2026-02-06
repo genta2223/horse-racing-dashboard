@@ -62,19 +62,20 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- Sidebar: Fund Management (V2 Endurance) ---
-st.sidebar.title("🏇 Hybrid EV 2.0")
-st.sidebar.markdown("### 🛡️ Endurance Mode")
+# --- Sidebar: Fund Management (V4.1 Hybrid) ---
+st.sidebar.title("🏇 V4.1 Hybrid Strategy")
+# st.sidebar.markdown("### 🛡️ Asset-Linked Slide")
 
-unit_price = st.sidebar.number_input("Unit Price (Fixed)", value=1000, step=100, help="1点あたりの固定投資額")
-ev_threshold = st.sidebar.number_input("EV Threshold", value=2.0, step=0.1, help="推奨閾値: 2.0")
+# User Request: Selectable Unit Price (100, 1000, 10000)
+unit_price = st.sidebar.selectbox("Base Unit Price (¥)", [100, 1000, 10000], index=0, help="初期投資ユニット額（スライド方式の基準）")
+# ev_threshold = st.sidebar.number_input("EV Threshold", value=2.0, step=0.1, help="推奨閾値: 2.0")
 
 st.sidebar.info(
     f"""
     **Current Strategy**
-    - Fixed Bet: ¥{unit_price:,}
-    - Min EV: {ev_threshold}
-    - Logic: Endurance (No Cuts)
+    - **Single**: EV > 2.0 (Spear)
+    - **Wide**: EV > 1.34 (Shield)
+    - **Unit**: ¥{unit_price:,} (+Slide)
     """
 )
 
