@@ -30,6 +30,10 @@
    IPAT_PARS_NUM=your_pars
    IPAT_PIN=your_pin
    DAILY_CAP=10000
+   SEMI_AUTO_MODE=True  # True=Ask for permission, False=Fully Auto
+   MAIL_SENDER=your_gmail@gmail.com
+   MAIL_APP_PASS=your_app_password
+   MAIL_RECEIVER=your_email@example.com
    ```
 
 ## 2. Daily Operation
@@ -41,12 +45,17 @@ python worker_collector.py
 ```
 - **Output**: Uploads raw data to Supabase.
 
-### Step 2: Prediction (The Brain)
-*(Currently manual or script-based)*
-- Run the prediction script (to be integrated) which:
-    1. Reads `raw_race_data`.
-    2. Runs `local_engine/brain.py`.
-    3. Inserts profitable bets into `bet_queue`.
+### Step 2: Prediction (Hybrid EV 2.0)
+Run the V2 predictor script (Logic: EV > 2.0 + Fixed Betting).
+```powershell
+python worker_predictor_v2.py
+```
+- **Behavior**:
+    1. Fetches JIT Odds (0B31 + 0B32).
+    2. Aligns with Race Card.
+    3. Queues bets with **EV > 2.0**.
+    4. Records Distortion data for future analysis.
+- **Schedule**: Run this periodically (e.g., every 10 mins) or manually before race.
 
 ### Step 3: Automated Betting
 Run the Shopper to execute bets in the queue.

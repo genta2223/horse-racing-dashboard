@@ -33,6 +33,8 @@ class WorkerCollector:
     def run(self):
         for target_date in TARGET_DATES:
             self.fetch_data("0B15", target_date) # 0B15: Race Card (Syussouba)
+            self.fetch_data("0B31", target_date) # 0B31: Odds (Tan/Fuku)
+            self.fetch_data("0B32", target_date) # 0B32: Odds (Uma-Ren/Uma-Tan)
             
         self.jv.JVClose()
         print("[WORKER] All Tasks Completed.")
@@ -44,7 +46,7 @@ class WorkerCollector:
         # Option 2: Read from Local Cache (TARGET download data)
         # Assuming user has downloaded data via TARGET.
         # JVOpen(dataspec, key, option, read_count, download_count, last_key)
-        res = self.jv.JVOpen(dataspec, f"{date_str}000000", 2, 0, 0, "")
+        res = self.jv.JVOpen(dataspec, f"{date_str}000000", 4, 0, 0, "")
         
         if res != 0:
             print(f"[WARN] JVOpen Failed (Code {res}). User might need to download data in TARGET.")

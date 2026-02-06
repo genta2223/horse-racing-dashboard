@@ -10,6 +10,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+import smtplib
+from email.mime.text import MIMEText
 from supabase import create_client
 
 # --- Configuration ---
@@ -23,7 +25,12 @@ IPAT_PIN = os.getenv("IPAT_PIN")
 
 # Safety Caps
 DAILY_BUDGET_CAP = int(os.getenv("DAILY_CAP", "10000")) # Default 10,000 JPY
-SAFETY_CONFIRM_MODE = True # If True, requires Enter key before click
+SEMI_AUTO_MODE = os.getenv("SEMI_AUTO_MODE", "True").lower() == "true"
+
+# Mail Config
+MAIL_SENDER = os.getenv("MAIL_SENDER")
+MAIL_APP_PASS = os.getenv("MAIL_APP_PASS")
+MAIL_RECEIVER = os.getenv("MAIL_RECEIVER")
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -31,10 +38,13 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 class Shopper:
     def __init__(self):
-        print(f"[SHOPPER] Initializing... Daily Cap: ¥{DAILY_BUDGET_CAP:,}")
+        print(f"[SHOPPER] Initializing... Daily Cap: ¥{DAILY_BUDGET_CAP:,}, Semi-Auto: {SEMI_AUTO_MODE}")
         self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         self.driver = None
         self.total_spent = 0
+        self.mail_user = MAIL_SENDER
+        self.mail_pass = MAIL_APP_PASS
+        self.mail_to = MAIL_RECEIVER
         
         # Verify Env
         if not all([IPAT_INET_ID, IPAT_SUBSCRIBER_ID, IPAT_PARS_NUM, IPAT_PIN]):
@@ -75,6 +85,26 @@ class Shopper:
             print("[ERROR] Login Step 2 Failed.")
             return False
 
+    def send_mail(self, subject, body):
+        if not all([self.mail_user, self.mail_pass, self.mail_to]):
+            print("[MAIL] Credentials missing. Skipping email.")
+            return
+
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = self.mail_user
+        msg['To'] = self.mail_to
+
+        try:
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(self.mail_user, self.mail_pass)
+            server.send_message(msg)
+            server.quit()
+            print("[MAIL] Sent successfully.")
+        except Exception as e:
+            print(f"[MAIL] Failed: {e}")
+
     def check_and_buy(self):
         # 1. Check Safety Cap
         if self.total_spent >= DAILY_BUDGET_CAP:
@@ -82,11 +112,7 @@ class Shopper:
             return False
 
         # 2. Fetch 'Approved' Bets from Supabase
-        # Table: 'bet_queue' (Assuming created or using instructions)
-        # We need to confirm the table name. Implementation plan said 'Bet_Queue'.
-        # Let's assume 'bet_queue' table with 'status', 'amount', 'race_id', 'horse_num'.
         res = self.supabase.table("bet_queue").select("*").eq("status", "approved").execute()
-        
         bets = res.data if hasattr(res, 'data') else []
         
         if not bets:
@@ -97,6 +123,8 @@ class Shopper:
             if not self.login_ipat():
                 return True # Retry login later
 
+        purchased_items = []
+
         for bet in bets:
             print(f"\n[BUY ALERT] Race: {bet['race_id']} Horse: {bet['horse_num']} Amount: ¥{bet['amount']}")
             
@@ -105,13 +133,8 @@ class Shopper:
                 print("[SAFETY] Bet exceeds cap. Skipping.")
                 continue
 
-            # --- Mocking the Purchase Steps (Actual Selenium selectors depend on JRA Update) ---
-            # 1. Click "Vote" menu
-            # 2. Select Race
-            # 3. Enter Vote
-            # 4. Confirm
-            
-            if SAFETY_CONFIRM_MODE:
+            # --- Manual Confirmation (Semi-Auto) ---
+            if SEMI_AUTO_MODE:
                 text = input(f"Permission to buy ¥{bet['amount']}? (y/n): ")
                 if text.lower() != 'y':
                     print("Skipped.")
@@ -124,7 +147,19 @@ class Shopper:
             self.total_spent += int(bet['amount'])
             self.supabase.table("bet_queue").update({"status": "purchased"}).eq("id", bet['id']).execute()
             print(f"[DONE] Purchased. Total Spent: ¥{self.total_spent:,}")
+            purchased_items.append(bet)
             
+        # Send Summary Mail
+        if purchased_items:
+            params = {
+               'count': len(purchased_items),
+               'total': sum(b['amount'] for b in purchased_items),
+               'cap': DAILY_BUDGET_CAP,
+               'spent': self.total_spent
+            }
+            body = f"Purchased {params['count']} bets.\nTotal Cost: ¥{params['total']:,}\n\nCurrent Daily Spend: ¥{params['spent']:,} / ¥{params['cap']:,}"
+            self.send_mail("JRA Auto-Bet Execution Report", body)
+
         return True
 
     def run_loop(self):
