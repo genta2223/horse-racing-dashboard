@@ -229,6 +229,15 @@ with tab_monitor:
             # Sort by Date desc for view
             df_display = df_view.sort_values('Date', ascending=False)
             
+            # Clean Horse Number for Display (Handle 3.0 -> 3)
+            def format_horse(val):
+                try:
+                    return str(int(float(val))) if '-' not in str(val) else val # Handle Single (3.0) and Wide (3-5)
+                except:
+                    return str(val)
+
+            df_display['Horse'] = df_display['Horse'].apply(format_horse)
+            
             st.dataframe(
                 df_display.style.applymap(highlight_result, subset=['Result']),
                 column_config={
