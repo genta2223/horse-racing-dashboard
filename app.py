@@ -84,7 +84,7 @@ if not supabase:
     st.stop()
 
 # --- Tabs ---
-tab_live, tab_backtest, tab_compound = st.tabs(["📊 Live Dashboard", "📚 Backtest (2023-24)", "📈 Compound Sim (2023-25)"])
+tab_live, tab_monitor, tab_backtest, tab_compound = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor", "📚 Backtest (2023-24)", "📈 Compound Sim (2023-25)"])
 
 with tab_live:
     # 1. Critical Alert System
@@ -153,6 +153,67 @@ with tab_live:
             st.warning("No Raw Data in DB.")
     except Exception as e:
         st.warning(f"⚠️ Could not fetch Raw Data monitor: {e}")
+
+with tab_monitor:
+    st.header("🔍 Live Action Monitor")
+    st.markdown("Real-time trading log and historical Trade/Pass decisions.")
+    
+    # Load Logs
+    log_file = "trade_log_v4.csv"
+    if os.path.exists(log_file):
+        df_log = pd.read_csv(log_file)
+        df_log['Date'] = pd.to_datetime(df_log['Date'])
+        
+        # Date Filter
+        dates = sorted(df_log['Date'].dt.date.unique(), reverse=True)
+        selected_date = st.selectbox("Select Date", options=dates, index=0)
+        
+        # Filter Data
+        df_day = df_log[df_log['Date'].dt.date == selected_date].copy()
+        
+        # Summary Panel
+        if not df_day.empty:
+            total_invest = df_day['Bet'].sum()
+            total_payout = df_day['Payout'].sum()
+            net_profit = total_payout - total_invest
+            wins = len(df_day[df_day['Result'] == 'WIN'])
+            total = len(df_day)
+            hit_rate = (wins / total * 100) if total > 0 else 0
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Invest", f"¥{total_invest:,}")
+            m2.metric("Payout", f"¥{total_payout:,}")
+            m3.metric("Net Profit", f"¥{net_profit:,}", delta=f"{net_profit:,}")
+            m4.metric("Hit Rate", f"{hit_rate:.1f}% ({wins}/{total})")
+            
+            st.divider()
+            
+            # Styled Table
+            # Highlight 'Result' column: WIN=Green, LOSE=Red
+            def highlight_result(val):
+                color = 'green' if val == 'WIN' else 'red'
+                return f'color: {color}; font-weight: bold'
+            
+            st.dataframe(
+                df_day.style.applymap(highlight_result, subset=['Result']),
+                column_config={
+                    "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
+                    "Odds": st.column_config.NumberColumn("Odds", format="%.1f倍"),
+                    "Prob": st.column_config.NumberColumn("AI Prob", format="%.1f%%"),
+                    "EV": st.column_config.NumberColumn("EV", format="%.2f"),
+                    "Bet": st.column_config.NumberColumn("Bet", format="¥%d"),
+                    "Payout": st.column_config.NumberColumn("Payout", format="¥%d"),
+                    "Result": st.column_config.TextColumn("Result"),
+                    "Balance": st.column_config.LineChartColumn("Balance Trend")
+                },
+                use_container_width=True,
+                height=500
+            )
+        else:
+            st.info("No trades found for this date.")
+            
+    else:
+        st.warning(f"Trade Log ({log_file}) not found. Run V4 simulation first.")
 
 with tab_backtest:
     st.header("📚 Backtest Results (2023-2024)")
