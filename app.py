@@ -164,20 +164,44 @@ with tab_monitor:
         df_log = pd.read_csv(log_file)
         df_log['Date'] = pd.to_datetime(df_log['Date'])
         
-        # Date Filter
-        dates = sorted(df_log['Date'].dt.date.unique(), reverse=True)
-        selected_date = st.selectbox("Select Date", options=dates, index=0)
+        # --- Filters ---
+        f1, f2, f3 = st.columns(3)
         
-        # Filter Data
-        df_day = df_log[df_log['Date'].dt.date == selected_date].copy()
+        with f1:
+            # Date Filter
+            dates = sorted(df_log['Date'].dt.date.unique(), reverse=True)
+            selected_date = st.selectbox("📅 Date", options=dates, index=0)
+            
+        # Base Data for Day
+        df_view = df_log[df_log['Date'].dt.date == selected_date].copy()
         
-        # Summary Panel
-        if not df_day.empty:
-            total_invest = df_day['Bet'].sum()
-            total_payout = df_day['Payout'].sum()
+        with f2:
+            # Type Filter (Single/Wide)
+            if not df_view.empty:
+                unique_types = sorted(df_view['Type'].astype(str).unique())
+                sel_types = st.multiselect("🏷️ Bet Type", options=unique_types, default=unique_types)
+                if sel_types:
+                    df_view = df_view[df_view['Type'].isin(sel_types)]
+            else:
+                st.write("No data")
+                
+        with f3:
+            # Result Filter (WIN/LOSE)
+            if not df_view.empty:
+                unique_results = sorted(df_view['Result'].astype(str).unique())
+                sel_results = st.multiselect("🏁 Result", options=unique_results, default=unique_results)
+                if sel_results:
+                    df_view = df_view[df_view['Result'].isin(sel_results)]
+
+        # --- Summary Panel (Dynamic) ---
+        if not df_view.empty:
+            total_invest = df_view['Bet'].sum()
+            total_payout = df_view['Payout'].sum()
             net_profit = total_payout - total_invest
-            wins = len(df_day[df_day['Result'] == 'WIN'])
-            total = len(df_day)
+            
+            # Hit Rate calc - consider filtered view
+            wins = len(df_view[df_view['Result'] == 'WIN'])
+            total = len(df_view)
             hit_rate = (wins / total * 100) if total > 0 else 0
             
             m1, m2, m3, m4 = st.columns(4)
@@ -189,13 +213,12 @@ with tab_monitor:
             st.divider()
             
             # Styled Table
-            # Highlight 'Result' column: WIN=Green, LOSE=Red
             def highlight_result(val):
                 color = 'green' if val == 'WIN' else 'red'
                 return f'color: {color}; font-weight: bold'
             
             st.dataframe(
-                df_day.style.applymap(highlight_result, subset=['Result']),
+                df_view.style.applymap(highlight_result, subset=['Result']),
                 column_config={
                     "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
                     "Odds": st.column_config.NumberColumn("Odds", format="%.1f倍"),
@@ -210,7 +233,7 @@ with tab_monitor:
                 height=500
             )
         else:
-            st.info("No trades found for this date.")
+            st.info("No trades matched your filters.")
             
     else:
         st.warning(f"Trade Log ({log_file}) not found. Run V4 simulation first.")
