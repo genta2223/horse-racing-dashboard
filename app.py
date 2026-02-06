@@ -136,13 +136,16 @@ with tab_live:
     st.subheader("📈 Odds Monitor (Win vs Quinella)")
 
     try:
-        res_raw = supabase.table("raw_race_data").select("*").order("timestamp", desc=True).limit(10).execute()
+        # Note: Supabase defaults to 'created_at'. Adjust if your schema uses 'timestamp'.
+        # Assuming 'created_at' based on standard schema.
+        res_raw = supabase.table("raw_race_data").select("*").order("created_at", desc=True).limit(10).execute()
         if res_raw.data:
             raw_df = pd.DataFrame(res_raw.data)
             odds_rows = raw_df[raw_df['data_type'].isin(['0B31', '0B32'])]
             
             if not odds_rows.empty:
-                st.dataframe(odds_rows[['timestamp', 'data_type', 'count']])
+                # Use created_at for display
+                st.dataframe(odds_rows[['created_at', 'data_type', 'count']])
                 st.caption("Raw Data Log (Verify 0B32 arrival)")
             else:
                 st.warning("No Odds Data (0B31/0B32) received recently.")
