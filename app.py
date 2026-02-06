@@ -79,6 +79,17 @@ st.sidebar.info(
     """
 )
 
+# --- JRA Status (Added) ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🏦 JRA Account")
+ipat_id = os.getenv("IPAT_INET_ID")
+if ipat_id:
+    masked_id = ipat_id[:4] + "****"
+    st.sidebar.success(f"Configured: {masked_id}")
+    st.sidebar.caption("Status: Standby (V4.1 Logic)")
+else:
+    st.sidebar.warning("Not Configured")
+
 # --- Main Page ---
 if not supabase:
     st.error("🚨 Supabase Connection Failed. Check Secrets.")
