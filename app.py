@@ -66,13 +66,8 @@ supabase = init_connection()
 st.sidebar.title("🏇 V4.1 Hybrid Strategy")
 # st.sidebar.markdown("### 🛡️ Asset-Linked Slide")
 
-# --- Sidebar: Fund Management (V4.1 Hybrid) ---
-st.sidebar.title("🏇 V4.1 Hybrid Strategy")
-# st.sidebar.markdown("### 🛡️ Asset-Linked Slide")
-
 # User Request: Selectable Unit Price (100, 1000, 10000)
 unit_price = st.sidebar.selectbox("Base Unit Price (¥)", [100, 1000, 10000], index=0, help="初期投資ユニット額（スライド方式の基準）")
-scale_factor = unit_price / 100  # Base simulation was 100 yen
 scale_factor = unit_price / 100  # Base simulation was 100 yen
 
 st.sidebar.info(
@@ -84,7 +79,81 @@ st.sidebar.info(
     """
 )
 
-# ... [Middle of file] ...
+# --- Main Page ---
+if not supabase:
+    st.error("🚨 Supabase Connection Failed. Check Secrets.")
+    st.stop()
+
+# --- Tabs ---
+tab_live, tab_monitor, tab_compound = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor", "📈 Compound Sim (2023-25)"])
+
+with tab_live:
+    # 1. Critical Alert System
+    alert_active = False 
+    if alert_active:
+        st.error("🚨 CRITICAL: DATA MISMATCH - TRADING HALTED 🚨")
+        st.stop()
+
+    # 2. Key Metrics (Endurance Stats)
+    st.markdown("### 📊 Live Performance (Endurance)")
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Fetch Bets with Error Handling
+    df_bets = pd.DataFrame()
+    try:
+        res_bets = supabase.table("bet_queue").select("*").execute()
+        if res_bets.data:
+            df_bets = pd.DataFrame(res_bets.data)
+    except Exception as e:
+        st.error(f"Error fetching bets: {e}")
+
+    # Calculate Metrics
+    today_invest = 0
+    streak = 0
+    
+    if not df_bets.empty and 'created_at' in df_bets.columns:
+        df_bets['created_at'] = pd.to_datetime(df_bets['created_at'])
+        df_today = df_bets[df_bets['created_at'].dt.date == datetime.date.today()]
+        today_invest = len(df_today) * unit_price
+        
+    col1.metric("Current Streak (Loses)", "0", delta_color="inverse")
+    col2.metric("Today's Invest", f"¥{today_invest:,}")
+    col3.metric("Next Hit Recovery", "---")
+    col4.metric("Status", "🟢 RUNNING")
+
+    # 3. Queue / EV Monitor
+    st.subheader("🎯 Bet Queue & EV Analysis")
+
+    if not df_bets.empty:
+        df_bets = df_bets.sort_values('created_at', ascending=False)
+        st.dataframe(
+            df_bets[['created_at', 'race_id', 'horse_num', 'bet_type', 'status', 'details']],
+            use_container_width=True
+        )
+    else:
+        st.info("No bets in queue yet.")
+
+    # 4. Odds Monitor (0B32 Support)
+    st.subheader("📈 Odds Monitor (Win vs Quinella)")
+
+    try:
+        # Note: Supabase defaults to 'created_at'. Adjust if your schema uses 'timestamp'.
+        # Assuming 'created_at' based on standard schema.
+        res_raw = supabase.table("raw_race_data").select("*").order("created_at", desc=True).limit(10).execute()
+        if res_raw.data:
+            raw_df = pd.DataFrame(res_raw.data)
+            odds_rows = raw_df[raw_df['data_type'].isin(['0B31', '0B32'])]
+            
+            if not odds_rows.empty:
+                # Use created_at for display
+                st.dataframe(odds_rows[['created_at', 'data_type', 'count']])
+                st.caption("Raw Data Log (Verify 0B32 arrival)")
+            else:
+                st.warning("No Odds Data (0B31/0B32) received recently.")
+        else:
+            st.warning("No Raw Data in DB.")
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch Raw Data monitor: {e}")
 
 with tab_monitor:
     st.header("🔍 Live Action Monitor")
