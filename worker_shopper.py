@@ -37,19 +37,29 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 class Shopper:
-    def __init__(self):
-        print(f"[SHOPPER] Initializing... Daily Cap: ¥{DAILY_BUDGET_CAP:,}, Semi-Auto: {SEMI_AUTO_MODE}")
-        self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    def __init__(self, supabase_client=None):
+        # Allow passing client to reuse connection
+        if supabase_client:
+            self.supabase = supabase_client
+        else:
+            self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            
+        # These will be updated dynamically from CloudManager in the loop, logic moved to run_cycle
         self.driver = None
         self.total_spent = 0
+        
+        # Mail config loaded from Environment (as before)
         self.mail_user = MAIL_SENDER
         self.mail_pass = MAIL_APP_PASS
         self.mail_to = MAIL_RECEIVER
         
-        # Verify Env
+        print(f"[SHOPPER] Initialized instance.")
+        
+    def check_env(self):
         if not all([IPAT_INET_ID, IPAT_SUBSCRIBER_ID, IPAT_PARS_NUM, IPAT_PIN]):
-            print("[ERROR] Missing IPAT Credentials in .env")
-            sys.exit(1)
+            print("[ERROR] Missing IPAT Credentials in .env (or Secrets)")
+            return False
+        return True
 
     def start_browser(self):
         options = webdriver.ChromeOptions()
@@ -105,10 +115,12 @@ class Shopper:
         except Exception as e:
             print(f"[MAIL] Failed: {e}")
 
-    def check_and_buy(self):
+    def check_and_buy(self, daily_limit_override=None):
         # 1. Check Safety Cap
-        if self.total_spent >= DAILY_BUDGET_CAP:
-            print(f"[SAFETY] Daily Cap Reached (¥{self.total_spent:,} / ¥{DAILY_BUDGET_CAP:,}). Stopping.")
+        limit = daily_limit_override if daily_limit_override is not None else DAILY_BUDGET_CAP
+        
+        if self.total_spent >= limit:
+            print(f"[SAFETY] Daily Cap Reached (¥{self.total_spent:,} / ¥{limit:,}). Stopping.")
             return False
 
         # 2. Fetch 'Approved' Bets from Supabase
@@ -124,12 +136,13 @@ class Shopper:
                 return True # Retry login later
 
         purchased_items = []
+        dashboard_url = "https://horse-racing-dashboard.streamlit.app/" # Replace with actual if known
 
         for bet in bets:
             print(f"\n[BUY ALERT] Race: {bet['race_id']} Horse: {bet['horse_num']} Amount: ¥{bet['amount']}")
             
             # Update Spending Check
-            if self.total_spent + int(bet['amount']) > DAILY_BUDGET_CAP:
+            if self.total_spent + int(bet['amount']) > limit:
                 print("[SAFETY] Bet exceeds cap. Skipping.")
                 continue
 
@@ -151,14 +164,30 @@ class Shopper:
             
         # Send Summary Mail
         if purchased_items:
-            params = {
-               'count': len(purchased_items),
-               'total': sum(b['amount'] for b in purchased_items),
-               'cap': DAILY_BUDGET_CAP,
-               'spent': self.total_spent
-            }
-            body = f"Purchased {params['count']} bets.\nTotal Cost: ¥{params['total']:,}\n\nCurrent Daily Spend: ¥{params['spent']:,} / ¥{params['cap']:,}"
-            self.send_mail("JRA Auto-Bet Execution Report", body)
+            count = len(purchased_items)
+            total = sum(b['amount'] for b in purchased_items)
+            
+            subject = f"🏇 [ACTION] {count} Bets Placed (¥{total:,})"
+            
+            # Rich Body
+            body_lines = [
+                "JRA Betting Action Report",
+                "=========================",
+                f"Total Invested: ¥{total:,}",
+                f"Current Cycle Spend: ¥{self.total_spent:,} / ¥{limit:,}",
+                "",
+                "Details:",
+            ]
+            for b in purchased_items:
+                body_lines.append(f"- Race {b['race_id']}: #{b['horse_num']} ({b['bet_type']}) ¥{b['amount']}")
+                if 'details' in b:
+                    body_lines.append(f"  Info: {b['details']}")
+            
+            body_lines.append("")
+            body_lines.append(f"Dashboard: {dashboard_url}")
+            body_lines.append("Status: PURCHASED (Order Sent)")
+            
+            self.send_mail(subject, "\n".join(body_lines))
 
         return True
 

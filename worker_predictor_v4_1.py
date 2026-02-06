@@ -146,6 +146,11 @@ class PredictorV4_1:
         # For standby, just run once or loop
         self.process_race("202602070101") # Dummy Next Race
 
+def run_prediction_cycle():
+    """Helper for App Background Thread"""
+    p = PredictorV4_1()
+    p.run()
+
 if __name__ == "__main__":
     p = PredictorV4_1()
     p.run()

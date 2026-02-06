@@ -1,0 +1,16 @@
+- [x] Fix Wide Horse Number Formatting (e.g. 3.0-5.0 -> 3-5) <!-- id: 6 -->
+- [x] Configure JRA Instant PAT Credentials (.env) <!-- id: 7 -->
+- [x] Create Standby Mode Script (V4.1 Logic) <!-- id: 8 -->
+- [x] Verify Connection (Note: Login Page structure mismatch/Maintenance) <!-- id: 9 -->
+- [x] Configure Email Credentials (SMTP) <!-- id: 10 -->
+- [x] Verify Email Connection (Success) <!-- id: 11 -->
+- [x] Final Dry-Run Verification (Environment & Browser & JRA Elements) <!-- id: 12 -->
+- [ ] Create `packages.txt` for Selenium (Chromium) on Streamlit Cloud <!-- id: 13 -->
+- [ ] Implement Supabase `system_config` table (Auto Bet, Daily Cap) <!-- id: 14 -->
+- [/] Integrate Background Worker Thread in `app.py` <!-- id: 15 -->
+- [/] Add Admin Auth & Control Panel to Dashboard <!-- id: 16 -->
+- [/] Remove hardcoded .env dependence for Critical Settings (use DB) <!-- id: 17 -->
+- [ ] Enhance Email Reporting (Detailed format) <!-- id: 18 -->
+- [ ] Change `unit_price` input to `st.selectbox([100, 1000, 10000])` <!-- id: 1 -->
+- [ ] Update Info Box to show V4.1 thresholds <!-- id: 2 -->
+- [ ] Deploy changes <!-- id: 3 -->
