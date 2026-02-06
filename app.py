@@ -84,7 +84,7 @@ if not supabase:
     st.stop()
 
 # --- Tabs ---
-tab_live, tab_backtest = st.tabs(["📊 Live Dashboard", "📚 Backtest Report (2023-2024)"])
+tab_live, tab_backtest, tab_compound = st.tabs(["📊 Live Dashboard", "📚 Backtest (2023-24)", "📈 Compound Sim (2023-25)"])
 
 with tab_live:
     # 1. Critical Alert System
@@ -184,6 +184,42 @@ with tab_backtest:
         st.dataframe(df_bt)
     else:
         st.warning(f"Backtest CSV not found: {csv_path}")
+
+with tab_compound:
+    st.header("📈 Compound Simulation (2023-2025)")
+    st.markdown("""
+    **Strategy**: Asset-Linked Slide Method
+    - **Initial**: ¥100,000
+    - **Unit**: +¥100 per +¥100k Asset
+    - **Logic**: Hybrid EV 2.0 (EV > 2.0)
+    """)
+    
+    comp_csv = "compound_simulation_2023_2025.csv"
+    if os.path.exists(comp_csv):
+        df_comp = pd.read_csv(comp_csv)
+        
+        # Metrics
+        initial_bal = 100000
+        final_bal = df_comp['current_balance'].iloc[-1]
+        peak_bal = df_comp['current_balance'].max()
+        max_unit = df_comp['unit_price'].max()
+        roi_comp = ((final_bal - initial_bal) / initial_bal) * 100
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Final Balance", f"¥{final_bal:,.0f}", delta=f"{roi_comp:.1f}%")
+        c2.metric("Peak Balance", f"¥{peak_bal:,.0f}")
+        c3.metric("Max Unit Price", f"¥{max_unit:,}")
+        c4.metric("Days Simulated", len(df_comp))
+        
+        # Chart
+        st.subheader("Asset Curve (2023-2025)")
+        st.line_chart(df_comp[['date', 'current_balance']].set_index('date'))
+        
+        # Data
+        st.subheader("Daily Log")
+        st.dataframe(df_comp)
+    else:
+        st.warning(f"Simulation CSV not found: {comp_csv}")
 
 # Footer
 st.markdown("---")
