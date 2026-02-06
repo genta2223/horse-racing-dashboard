@@ -84,7 +84,7 @@ if not supabase:
     st.stop()
 
 # --- Tabs ---
-tab_live, tab_monitor, tab_backtest, tab_compound = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor", "📚 Backtest (2023-24)", "📈 Compound Sim (2023-25)"])
+tab_live, tab_monitor, tab_compound = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor", "📈 Compound Sim (2023-25)"])
 
 with tab_live:
     # 1. Critical Alert System
