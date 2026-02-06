@@ -247,53 +247,54 @@ with tab_backtest:
         st.warning(f"Backtest CSV not found: {csv_path}")
 
 with tab_compound:
-    st.header("📈 Compound Simulation Comparison (V2 vs V3)")
+    st.header("📈 Compound Simulation Comparison (V2 vs V3 vs V4)")
     st.markdown("""
     **Strategy**: Asset-Linked Slide Method (Stepwise)
     - **Initial**: ¥100,000 | **Unit**: +¥100 per +¥100k
-    - **Red Line (V2)**: Old Model (Failed in 2025)
-    - **Blue Line (V3)**: New Model (2025 Adaptive + Odds Divergence)
+    - **Red (V2)**: Old Model (Failed) | **Blue (V3)**: V3 Adaptive | **Green (V4)**: Hybrid (Single+Wide)
     """)
     
     csv_v2 = "compound_simulation_2023_2025.csv"
     csv_v3 = "compound_simulation_2023_2025_v3.csv"
+    csv_v4 = "compound_simulation_2023_2025_v4.csv"
     
     if os.path.exists(csv_v2) and os.path.exists(csv_v3):
         df_v2 = pd.read_csv(csv_v2)
         df_v3 = pd.read_csv(csv_v3)
+        df_v4 = pd.read_csv(csv_v4) if os.path.exists(csv_v4) else df_v3.copy() # Fallback
         
         # Preprocess
         df_v2['date'] = pd.to_datetime(df_v2['date'])
         df_v3['date'] = pd.to_datetime(df_v3['date'])
+        df_v4['date'] = pd.to_datetime(df_v4['date'])
         
-        # Metrics Comparison
+        # Metrics
         m_v2 = df_v2['current_balance'].iloc[-1]
         m_v3 = df_v3['current_balance'].iloc[-1]
-        
-        # 2025 Performance (Approx)
-        mask_2025 = df_v3['date'].dt.year == 2025
-        profit_2025_v3 = df_v3[mask_2025]['daily_profit'].sum()
+        m_v4 = df_v4['current_balance'].iloc[-1]
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Final Balance (V3)", f"¥{m_v3:,.0f}", delta=f"vs V2: ¥{m_v3-m_v2:,.0f}")
-        c2.metric("2025 Net Profit (V3)", f"¥{profit_2025_v3:,.0f}", delta="V3 Recovery")
-        c3.metric("Peak Balance (V3)", f"¥{df_v3['current_balance'].max():,.0f}")
+        c2.metric("Final Balance (V4)", f"¥{m_v4:,.0f}", delta=f"vs V3: ¥{m_v4-m_v3:,.0f}")
+        c3.metric("Peak Balance (V4)", f"¥{df_v4['current_balance'].max():,.0f}")
 
         # Chart
         st.subheader("Asset Curve Comparison")
         chart_data = pd.DataFrame({
             'Date': df_v3['date'],
             'V2 (Old)': df_v2.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values,
-            'V3 (New)': df_v3['current_balance'].values
+            'V3 (Single)': df_v3['current_balance'].values,
+            'V4 (Hybrid)': df_v4.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values
         }).set_index('Date')
-        st.line_chart(chart_data)
+        
+        st.line_chart(chart_data, color=["#FF4B4B", "#1f77b4", "#2ca02c"]) # Red, Blue, Green
         
         # Data
-        with st.expander("View Daily Log (V3)"):
-            st.dataframe(df_v3)
+        with st.expander("View Daily Log (V4 Hybrid)"):
+            st.dataframe(df_v4)
             
     else:
-        st.warning(f"Sim files not found. V2: {os.path.exists(csv_v2)}, V3: {os.path.exists(csv_v3)}")
+        st.warning("Simulation files missing.")
 
 # Footer
 st.markdown("---")
