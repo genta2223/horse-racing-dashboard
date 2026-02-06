@@ -66,9 +66,14 @@ supabase = init_connection()
 st.sidebar.title("🏇 V4.1 Hybrid Strategy")
 # st.sidebar.markdown("### 🛡️ Asset-Linked Slide")
 
+# --- Sidebar: Fund Management (V4.1 Hybrid) ---
+st.sidebar.title("🏇 V4.1 Hybrid Strategy")
+# st.sidebar.markdown("### 🛡️ Asset-Linked Slide")
+
 # User Request: Selectable Unit Price (100, 1000, 10000)
 unit_price = st.sidebar.selectbox("Base Unit Price (¥)", [100, 1000, 10000], index=0, help="初期投資ユニット額（スライド方式の基準）")
-# ev_threshold = st.sidebar.number_input("EV Threshold", value=2.0, step=0.1, help="推奨閾値: 2.0")
+scale_factor = unit_price / 100  # Base simulation was 100 yen
+scale_factor = unit_price / 100  # Base simulation was 100 yen
 
 st.sidebar.info(
     f"""
@@ -78,6 +83,69 @@ st.sidebar.info(
     - **Unit**: ¥{unit_price:,} (+Slide)
     """
 )
+
+# ... [Middle of file] ...
+
+with tab_monitor:
+    st.header("🔍 Live Action Monitor")
+    st.markdown("Real-time trading log and historical Trade/Pass decisions.")
+    
+    log_file = "trade_log_v4_1.csv"
+    if os.path.exists(log_file):
+        df_log = pd.read_csv(log_file)
+        df_log['Date'] = pd.to_datetime(df_log['Date'])
+        
+        # --- Apply Scaling ---
+        if scale_factor != 1.0:
+            df_log['Bet'] = df_log['Bet'] * scale_factor
+            df_log['Payout'] = df_log['Payout'] * scale_factor
+            df_log['Balance'] = df_log['Balance'] * scale_factor
+
+# ... [Skipping ahead to Compound Tab] ...
+
+with tab_compound:
+    st.header("📈 Compound Simulation Comparison (V2 vs V3 vs V4 vs V4.1)")
+    # ... markdown ...
+    
+    if os.path.exists(csv_v2) and os.path.exists(csv_v3):
+        df_v2 = pd.read_csv(csv_v2)
+        df_v3 = pd.read_csv(csv_v3)
+        df_v4 = pd.read_csv(csv_v4) if os.path.exists(csv_v4) else df_v3.copy()
+        df_v4_1 = pd.read_csv(csv_v4_1) if os.path.exists(csv_v4_1) else df_v3.copy()
+        
+        # Apply Scaling to Balance History
+        if scale_factor != 1.0:
+            df_v2['current_balance'] *= scale_factor
+            df_v3['current_balance'] *= scale_factor
+            df_v4['current_balance'] *= scale_factor
+            df_v4_1['current_balance'] *= scale_factor
+        
+        # Preprocess
+        df_v2['date'] = pd.to_datetime(df_v2['date'])
+        df_v3['date'] = pd.to_datetime(df_v3['date'])
+        df_v4['date'] = pd.to_datetime(df_v4['date'])
+        df_v4_1['date'] = pd.to_datetime(df_v4_1['date'])
+        
+        # Metrics
+        m_v3 = df_v3['current_balance'].iloc[-1]
+        m_v4 = df_v4['current_balance'].iloc[-1]
+        m_v4_1 = df_v4_1['current_balance'].iloc[-1]
+        
+        # Calculate Unit Acceleration (Target scales with unit)
+        target_doubling = 200000 * scale_factor
+        
+        def get_days_to_reach(df, target):
+            reached = df[df['current_balance'] >= target]
+            return (reached.iloc[0]['date'] - df.iloc[0]['date']).days if not reached.empty else "N/A"
+            
+        acc_v3 = get_days_to_reach(df_v3, target_doubling)
+        acc_v4_1 = get_days_to_reach(df_v4_1, target_doubling)
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("V3 Balance", f"¥{m_v3:,.0f}")
+        c2.metric("V4 Balance", f"¥{m_v4:,.0f}", delta=f"vs V3: ¥{m_v4-m_v3:,.0f}")
+        c3.metric("V4.1 Balance", f"¥{m_v4_1:,.0f}", delta=f"vs V4: ¥{m_v4_1-m_v4:,.0f}")
+        c4.metric(f"Days to ¥{target_doubling/1000:,.0f}k", f"{acc_v4_1} days", delta=f"{acc_v3 - acc_v4_1} days faster" if isinstance(acc_v3, int) and isinstance(acc_v4_1, int) else "---")
 
 # --- Main Page ---
 if not supabase:
@@ -160,10 +228,16 @@ with tab_monitor:
     st.markdown("Real-time trading log and historical Trade/Pass decisions.")
     
     # Load Logs
-    log_file = "trade_log_v4.csv"
+    log_file = "trade_log_v4_1.csv"
     if os.path.exists(log_file):
         df_log = pd.read_csv(log_file)
         df_log['Date'] = pd.to_datetime(df_log['Date'])
+        
+        # --- Apply Scaling ---
+        if scale_factor != 1.0:
+            df_log['Bet'] = df_log['Bet'] * scale_factor
+            df_log['Payout'] = df_log['Payout'] * scale_factor
+            df_log['Balance'] = df_log['Balance'] * scale_factor
         df_log['Year'] = df_log['Date'].dt.year
         df_log['Month'] = df_log['Date'].dt.month
         
@@ -286,24 +360,33 @@ with tab_compound:
         df_v4['date'] = pd.to_datetime(df_v4['date'])
         df_v4_1['date'] = pd.to_datetime(df_v4_1['date'])
         
+        # Apply Scaling to Balance History
+        if scale_factor != 1.0:
+            df_v2['current_balance'] *= scale_factor
+            df_v3['current_balance'] *= scale_factor
+            df_v4['current_balance'] *= scale_factor
+            df_v4_1['current_balance'] *= scale_factor
+        
         # Metrics
         m_v3 = df_v3['current_balance'].iloc[-1]
         m_v4 = df_v4['current_balance'].iloc[-1]
         m_v4_1 = df_v4_1['current_balance'].iloc[-1]
         
-        # Calculate Unit Acceleration (Days to reach 200k)
-        def get_days_to_reach(df, target=200000):
+        # Calculate Unit Acceleration (Target scales with unit)
+        target_doubling = 200000 * scale_factor
+        
+        def get_days_to_reach(df, target):
             reached = df[df['current_balance'] >= target]
             return (reached.iloc[0]['date'] - df.iloc[0]['date']).days if not reached.empty else "N/A"
             
-        acc_v3 = get_days_to_reach(df_v3)
-        acc_v4_1 = get_days_to_reach(df_v4_1)
+        acc_v3 = get_days_to_reach(df_v3, target_doubling)
+        acc_v4_1 = get_days_to_reach(df_v4_1, target_doubling)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("V3 Balance", f"¥{m_v3:,.0f}")
         c2.metric("V4 Balance", f"¥{m_v4:,.0f}", delta=f"vs V3: ¥{m_v4-m_v3:,.0f}")
         c3.metric("V4.1 Balance", f"¥{m_v4_1:,.0f}", delta=f"vs V4: ¥{m_v4_1-m_v4:,.0f}")
-        c4.metric("Days to ¥200k", f"{acc_v4_1} days", delta=f"{acc_v3 - acc_v4_1} days faster" if isinstance(acc_v3, int) and isinstance(acc_v4_1, int) else "---")
+        c4.metric(f"Days to ¥{target_doubling/1000:,.0f}k", f"{acc_v4_1} days", delta=f"{acc_v3 - acc_v4_1} days faster" if isinstance(acc_v3, int) and isinstance(acc_v4_1, int) else "---")
 
         # Chart
         st.subheader("Asset Curve Comparison")
