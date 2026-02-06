@@ -163,33 +163,42 @@ with tab_monitor:
     if os.path.exists(log_file):
         df_log = pd.read_csv(log_file)
         df_log['Date'] = pd.to_datetime(df_log['Date'])
+        df_log['Year'] = df_log['Date'].dt.year
+        df_log['Month'] = df_log['Date'].dt.month
         
         # --- Filters ---
-        f1, f2, f3 = st.columns(3)
+        st.markdown("##### 🕵️ Filter Criteria")
+        f1, f2, f3, f4 = st.columns(4)
+        
+        df_view = df_log.copy()
         
         with f1:
-            # Date Filter
-            dates = sorted(df_log['Date'].dt.date.unique(), reverse=True)
-            selected_date = st.selectbox("📅 Date", options=dates, index=0)
-            
-        # Base Data for Day
-        df_view = df_log[df_log['Date'].dt.date == selected_date].copy()
+            # Year Filter
+            all_years = sorted(df_log['Year'].unique(), reverse=True)
+            sel_years = st.multiselect("📅 Year", options=all_years, default=all_years[:1]) # Default to latest year
+            if sel_years:
+                df_view = df_view[df_view['Year'].isin(sel_years)]
         
         with f2:
-            # Type Filter (Single/Wide)
-            if not df_view.empty:
-                unique_types = sorted(df_view['Type'].astype(str).unique())
-                sel_types = st.multiselect("🏷️ Bet Type", options=unique_types, default=unique_types)
-                if sel_types:
-                    df_view = df_view[df_view['Type'].isin(sel_types)]
-            else:
-                st.write("No data")
+            # Month Filter
+            all_months = sorted(df_view['Month'].unique())
+            sel_months = st.multiselect("🗓️ Month", options=all_months)
+            if sel_months:
+                df_view = df_view[df_view['Month'].isin(sel_months)]
                 
         with f3:
-            # Result Filter (WIN/LOSE)
+            # Type Filter
+            if not df_view.empty:
+                unique_types = sorted(df_view['Type'].astype(str).unique())
+                sel_types = st.multiselect("🏷️ Bet Type", options=unique_types)
+                if sel_types:
+                    df_view = df_view[df_view['Type'].isin(sel_types)]
+                
+        with f4:
+            # Result Filter
             if not df_view.empty:
                 unique_results = sorted(df_view['Result'].astype(str).unique())
-                sel_results = st.multiselect("🏁 Result", options=unique_results, default=unique_results)
+                sel_results = st.multiselect("🏁 Result", options=unique_results)
                 if sel_results:
                     df_view = df_view[df_view['Result'].isin(sel_results)]
 
@@ -217,8 +226,11 @@ with tab_monitor:
                 color = 'green' if val == 'WIN' else 'red'
                 return f'color: {color}; font-weight: bold'
             
+            # Sort by Date desc for view
+            df_display = df_view.sort_values('Date', ascending=False)
+            
             st.dataframe(
-                df_view.style.applymap(highlight_result, subset=['Result']),
+                df_display.style.applymap(highlight_result, subset=['Result']),
                 column_config={
                     "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
                     "Odds": st.column_config.NumberColumn("Odds", format="%.1f倍"),
