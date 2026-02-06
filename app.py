@@ -163,7 +163,7 @@ if ADMIN_PASS_CORRECT:
     new_active = st.sidebar.toggle("Enable Auto Bet", value=is_active)
     if new_active != is_active:
         cm.set_auto_bet_active(new_active)
-        st.sidebar.rerun()
+        st.rerun()
     
     # Cap Setting
     current_cap = cm.get_daily_cap()
