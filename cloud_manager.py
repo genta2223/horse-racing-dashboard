@@ -35,14 +35,16 @@ class CloudManager:
 
     # Helpers for specific keys
     def is_auto_bet_active(self):
-        val = self.get_config("auto_bet_active", "False")
+        # User defined key: 'AUTO_BET' ('true'/'false')
+        val = self.get_config("AUTO_BET", "false")
         return val.lower() == "true"
 
     def set_auto_bet_active(self, is_active: bool):
-        return self.set_config("auto_bet_active", str(is_active))
+        val = "true" if is_active else "false"
+        return self.set_config("AUTO_BET", val)
 
     def get_daily_cap(self):
-        val = self.get_config("daily_cap", "10000")
+        val = self.get_config("daily_cap", "10000") # Keep lower for now unless user specified otherwise, or unify. User didn't specify daily cap key in prompt, just AUTO_BET.
         try:
             return int(val)
         except:
@@ -50,3 +52,12 @@ class CloudManager:
     
     def set_daily_cap(self, amount: int):
         return self.set_config("daily_cap", str(amount))
+
+    def check_admin_pass(self, input_pass):
+        # User defined key: 'ADMIN_PASSWORD'
+        if not input_pass: return False
+        stored = self.get_config("ADMIN_PASSWORD", "")
+        if not stored:
+            # Fallback to Env if DB entry missing
+            return input_pass == os.getenv("ADMIN_PASS")
+        return input_pass == stored

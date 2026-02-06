@@ -122,7 +122,7 @@ st.sidebar.markdown("### 🏦 JRA Account & Control")
 
 # Admin Auth
 admin_pass_input = st.sidebar.text_input("Admin Password", type="password")
-ADMIN_PASS_CORRECT = (admin_pass_input and admin_pass_input == os.getenv("ADMIN_PASS", "no_pass_set"))
+ADMIN_PASS_CORRECT = cm.check_admin_pass(admin_pass_input)
 
 # Status Display
 is_active = cm.is_auto_bet_active()
