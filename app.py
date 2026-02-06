@@ -11,8 +11,14 @@ st.set_page_config(page_title="Hybrid EV 2.0 Dashboard", layout="wide", page_ico
 load_dotenv()
 
 # Supabase Connection
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Try st.secrets first (Streamlit Cloud), then os.getenv (Local)
+try:
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
+except FileNotFoundError:
+    # Local run without .streamlit/secrets.toml
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 @st.cache_resource
 def init_connection():
