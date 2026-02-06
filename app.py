@@ -174,7 +174,17 @@ with tab_monitor:
 
 with tab_compound:
     st.header("📈 Compound Simulation Comparison (V2 vs V3 vs V4 vs V4.1)")
-    # ... markdown ...
+    st.markdown("""
+    **Strategy**: Asset-Linked Slide Method (Stepwise)
+    - **Initial**: ¥100,000 | **Unit**: +¥100 per +¥100k
+    - **Red (V2)**: Old Model (Failed) | **Blue (V3)**: V3 Adaptive 
+    - **Green (V4)**: Hybrid (Single+Wide) | **Purple (V4.1)**: Relaxed Wide (Shield)
+    """)
+    
+    csv_v2 = "compound_simulation_2023_2025.csv"
+    csv_v3 = "compound_simulation_2023_2025_v3.csv"
+    csv_v4 = "compound_simulation_2023_2025_v4.csv"
+    csv_v4_1 = "compound_simulation_v4_1_wide_relaxed.csv"
     
     if os.path.exists(csv_v2) and os.path.exists(csv_v3):
         df_v2 = pd.read_csv(csv_v2)
