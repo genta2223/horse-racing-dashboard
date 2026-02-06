@@ -22,9 +22,8 @@ st.set_page_config(page_title="Hybrid EV 2.0 Dashboard", layout="wide", page_ico
 load_dotenv()
 
 # --- Database Connection ---
-# 1. Try st.secrets (Streamlit Cloud)
-# 2. Try os.getenv (Local .env)
-def find_credentials():
+def find_credentials() -> tuple[str | None, str | None]:  # FIX #11: Type hints
+    """Find Supabase credentials from secrets or environment"""
     url, key = None, None
     try:
         if "SUPABASE_URL" in st.secrets:
@@ -47,6 +46,7 @@ SUPABASE_URL, SUPABASE_KEY = find_credentials()
 
 @st.cache_resource
 def init_connection():
+    """Initialize Supabase connection"""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     try:
@@ -63,7 +63,10 @@ if not supabase:
 # --- Background Worker Manager ---
 @st.cache_resource
 def init_background_worker():
-    # This runs exactly once due to cache_resource
+    """
+    FIX #3: Return shared instances to prevent duplication
+    Initialize background worker thread with shared CloudManager and Shopper instances
+    """
     cm = CloudManager(supabase)
     shopper = Shopper(supabase)
     
@@ -71,48 +74,63 @@ def init_background_worker():
         print("[BG] Worker Thread Started.")
         while True:
             try:
-                # 1. Check Config
+                # Check if auto-bet is active
                 is_active = cm.is_auto_bet_active()
                 
                 if is_active:
                     print("[BG] Auto Bet Active. Running cycle...")
-                    # A. Run Prediction
+                    
+                    # A. Run Prediction (with error handling)
                     try:
                         run_prediction_cycle()
                     except Exception as e:
                         print(f"[BG] Prediction Error: {e}")
                         cm.log_system_event("ERROR", "Prediction Failed", str(e))
-                        # Optional: Alert for prediction too? Maybe less critical than shopping.
                     
-                    # B. Run Shopper
+                    # B. Run Shopper (with enhanced error handling)
                     current_cap = cm.get_daily_cap()
                     try:
-                       shopper.check_and_buy(daily_limit_override=current_cap)
+                        shopper.check_and_buy(daily_limit_override=current_cap)
                     except Exception as e:
-                       print(f"[BG] Shopper Critical Error: {e}")
-                       cm.log_system_event("CRITICAL", "Shopper Crashed", str(e))
-                       shopper.send_error_alert(e, context="Shopper Loop")
+                        print(f"[BG] Shopper Critical Error: {e}")
+                        cm.log_system_event("CRITICAL", "Shopper Crashed", str(e))
+                        # FIX #6: Wrap alert sending to prevent cascading failures
+                        try:
+                            shopper.send_error_alert(e, context="Shopper Loop")
+                        except Exception as alert_error:
+                            print(f"[BG] Alert sending failed: {alert_error}")
+                            cm.log_system_event("CRITICAL", "Alert System Failed", str(alert_error))
                 else:
                     print("[BG] Auto Bet INACTIVE. Sleeping...")
                 
-                time.sleep(60) # 1 min interval
+                time.sleep(60)  # 1 min interval
+                
             except Exception as e:
                 print(f"[BG] Global Loop Error: {e}")
-                cm.log_system_event("CRITICAL", "Global Loop Crashed", str(e))
+                try:
+                    cm.log_system_event("CRITICAL", "Global Loop Crashed", str(e))
+                except:
+                    print("[BG] Even logging failed. System in critical state.")
                 time.sleep(60)
 
     t = threading.Thread(target=background_loop, daemon=True)
     t.start()
-    return t
+    
+    # FIX #3: Return all shared resources
+    return {
+        "thread": t,
+        "cloud_manager": cm,
+        "shopper": shopper
+    }
 
-# Initialize Worker
-init_background_worker()
-cm = CloudManager(supabase)
+# Initialize Worker and get shared instances
+worker_resources = init_background_worker()
+cm = worker_resources["cloud_manager"]  # FIX #3: Use shared instance
 
 # --- Sidebar: Fund Management (V4.1 Hybrid) ---
 st.sidebar.title("🏇 V4.1 Hybrid Strategy")
 
-# User Request: Selectable Unit Price (100, 1000, 10000)
+# User Request: Selectable Unit Price
 unit_price = st.sidebar.selectbox("Base Unit Price (¥)", [100, 1000, 10000], index=0, help="初期投資ユニット額")
 scale_factor = unit_price / 100
 
@@ -163,17 +181,17 @@ else:
 tab_live, tab_monitor, tab_compound = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor", "📈 Compound Sim (2023-25)"])
 
 with tab_live:
-    # 1. Critical Alert System
+    # Critical Alert System
     alert_active = False 
     if alert_active:
         st.error("🚨 CRITICAL: DATA MISMATCH - TRADING HALTED 🚨")
         st.stop()
 
-    # 2. Key Metrics (Endurance Stats)
+    # Key Metrics
     st.markdown("### 📊 Live Performance (Endurance)")
     col1, col2, col3, col4 = st.columns(4)
 
-    # Fetch Bets with Error Handling
+    # Fetch Bets
     df_bets = pd.DataFrame()
     try:
         res_bets = supabase.table("bet_queue").select("*").execute()
@@ -184,7 +202,6 @@ with tab_live:
 
     # Calculate Metrics
     today_invest = 0
-    today_wins = 0
     
     if not df_bets.empty and 'created_at' in df_bets.columns:
         df_bets['created_at'] = pd.to_datetime(df_bets['created_at'])
@@ -196,7 +213,7 @@ with tab_live:
     col3.metric("Daily Cap", f"¥{cm.get_daily_cap():,}")
     col4.metric("Engine Status", "STANDBY" if not is_active else "RUNNING", delta_color="normal" if is_active else "off")
 
-    # 3. Queue / EV Monitor
+    # Queue / EV Monitor
     st.subheader("🎯 Bet Queue & EV Analysis")
     if not df_bets.empty:
         df_bets = df_bets.sort_values('created_at', ascending=False)
@@ -207,7 +224,7 @@ with tab_live:
     else:
         st.info("No bets in queue yet.")
 
-    # 4. Odds Monitor
+    # Odds Monitor
     st.subheader("📈 Odds Monitor")
     try:
         res_raw = supabase.table("raw_race_data").select("*").order("created_at", desc=True).limit(5).execute()
@@ -221,10 +238,9 @@ with tab_live:
 with tab_monitor:
     st.header("🔍 Live Action Monitor")
     
-    # --- System Alerts (Added) ---
+    # System Alerts
     st.subheader("🚨 System Logs & Alerts")
     try:
-        # Fetch last 5 ERROR/CRITICAL logs
         res_logs = supabase.table("system_logs")\
             .select("*")\
             .order("timestamp", desc=True)\
@@ -233,7 +249,6 @@ with tab_monitor:
             
         if res_logs.data:
             df_logs = pd.DataFrame(res_logs.data)
-            # Filter for Errors (Visual)
             st.dataframe(
                 df_logs[['timestamp', 'level', 'message', 'details']], 
                 use_container_width=True,
@@ -256,7 +271,7 @@ with tab_monitor:
         df_log = pd.read_csv(log_file)
         df_log['Date'] = pd.to_datetime(df_log['Date'])
         
-        # Apply Scaling and Filters (Same as previous logic)
+        # Apply Scaling
         if scale_factor != 1.0:
             df_log['Bet'] = df_log['Bet'] * scale_factor
             df_log['Payout'] = df_log['Payout'] * scale_factor
@@ -265,12 +280,13 @@ with tab_monitor:
         df_log['Year'] = df_log['Date'].dt.year
         df_log['Month'] = df_log['Date'].dt.month
         
-        # --- Filters Interface ---
+        # Filters
         f1, f2, f3 = st.columns(3)
         with f1:
             years = sorted(df_log['Year'].unique(), reverse=True)
-            sel_y = st.multiselect("Year", years, default=years[:1])
-            if sel_y: df_log = df_log[df_log['Year'].isin(sel_y)]
+            sel_y = st.multiselect("Year", years, default=years[:1] if years else [])
+            if sel_y: 
+                df_log = df_log[df_log['Year'].isin(sel_y)]
         
         # Display
         total_profit = df_log['Payout'].sum() - df_log['Bet'].sum()
@@ -282,5 +298,4 @@ with tab_monitor:
 
 with tab_compound:
     st.header("Compound Simulation")
-    # ... (Keep existing simple logic or update later) ...
     st.info("V4.1 Simulation Comparison available in previous version.")
