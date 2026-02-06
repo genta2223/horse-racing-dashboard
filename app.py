@@ -265,36 +265,41 @@ with tab_monitor:
         st.error(f"Failed to fetch logs: {e}")
 
     st.divider()
-    st.markdown("### 📜 Trade History")
-    log_file = "trade_log_v4_1.csv"
-    if os.path.exists(log_file):
-        df_log = pd.read_csv(log_file)
-        df_log['Date'] = pd.to_datetime(df_log['Date'])
-        
-        # Apply Scaling
-        if scale_factor != 1.0:
-            df_log['Bet'] = df_log['Bet'] * scale_factor
-            df_log['Payout'] = df_log['Payout'] * scale_factor
-            df_log['Balance'] = df_log['Balance'] * scale_factor
-        
-        df_log['Year'] = df_log['Date'].dt.year
-        df_log['Month'] = df_log['Date'].dt.month
-        
-        # Filters
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            years = sorted(df_log['Year'].unique(), reverse=True)
-            sel_y = st.multiselect("Year", years, default=years[:1] if years else [])
-            if sel_y: 
-                df_log = df_log[df_log['Year'].isin(sel_y)]
-        
-        # Display
-        total_profit = df_log['Payout'].sum() - df_log['Bet'].sum()
-        st.metric("Net Profit (Filtered)", f"¥{total_profit:,}")
-        
-        st.dataframe(df_log.sort_values('Date', ascending=False), use_container_width=True)
-    else:
-        st.warning("No Trade Log found.")
+    st.markdown("### 📜 Trade History (Live Info)")
+    
+    # Switch from static CSV to Supabase 'bet_queue' (purchased items)
+    try:
+        # Fetch last 50 purchased bets
+        res_history = supabase.table("bet_queue")\
+            .select("*")\
+            .eq("status", "purchased")\
+            .order("created_at", desc=True)\
+            .limit(50)\
+            .execute()
+            
+        if res_history.data:
+            df_hist = pd.DataFrame(res_history.data)
+            
+            # Format Timestamp
+            if 'created_at' in df_hist.columns:
+                df_hist['created_at'] = pd.to_datetime(df_hist['created_at'])
+            
+            # Display Clean Table
+            st.dataframe(
+                df_hist[['created_at', 'race_id', 'horse_num', 'bet_type', 'amount', 'details']],
+                use_container_width=True,
+                column_config={
+                    "created_at": st.column_config.DatetimeColumn("Time", format="MM-DD HH:mm"),
+                    "amount": st.column_config.NumberColumn("Amount", format="¥%d"),
+                    "horse_num": st.column_config.TextColumn("Horse"),
+                    "details": st.column_config.TextColumn("Strategy Info"),
+                }
+            )
+        else:
+            st.info("ℹ️ No live trades recorded yet.")
+            
+    except Exception as e:
+        st.error(f"Failed to fetch trade history: {e}")
 
 with tab_compound:
     st.header("Compound Simulation")
