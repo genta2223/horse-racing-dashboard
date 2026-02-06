@@ -292,26 +292,38 @@ with tab_compound:
     csv_v2 = "compound_simulation_2023_2025.csv"
     csv_v3 = "compound_simulation_2023_2025_v3.csv"
     csv_v4 = "compound_simulation_2023_2025_v4.csv"
+    csv_v4_1 = "compound_simulation_v4_1_wide_relaxed.csv"
     
     if os.path.exists(csv_v2) and os.path.exists(csv_v3):
         df_v2 = pd.read_csv(csv_v2)
         df_v3 = pd.read_csv(csv_v3)
-        df_v4 = pd.read_csv(csv_v4) if os.path.exists(csv_v4) else df_v3.copy() # Fallback
+        df_v4 = pd.read_csv(csv_v4) if os.path.exists(csv_v4) else df_v3.copy()
+        df_v4_1 = pd.read_csv(csv_v4_1) if os.path.exists(csv_v4_1) else df_v3.copy()
         
         # Preprocess
         df_v2['date'] = pd.to_datetime(df_v2['date'])
         df_v3['date'] = pd.to_datetime(df_v3['date'])
         df_v4['date'] = pd.to_datetime(df_v4['date'])
+        df_v4_1['date'] = pd.to_datetime(df_v4_1['date'])
         
         # Metrics
-        m_v2 = df_v2['current_balance'].iloc[-1]
         m_v3 = df_v3['current_balance'].iloc[-1]
         m_v4 = df_v4['current_balance'].iloc[-1]
+        m_v4_1 = df_v4_1['current_balance'].iloc[-1]
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Final Balance (V3)", f"¥{m_v3:,.0f}", delta=f"vs V2: ¥{m_v3-m_v2:,.0f}")
-        c2.metric("Final Balance (V4)", f"¥{m_v4:,.0f}", delta=f"vs V3: ¥{m_v4-m_v3:,.0f}")
-        c3.metric("Peak Balance (V4)", f"¥{df_v4['current_balance'].max():,.0f}")
+        # Calculate Unit Acceleration (Days to reach 200k)
+        def get_days_to_reach(df, target=200000):
+            reached = df[df['current_balance'] >= target]
+            return (reached.iloc[0]['date'] - df.iloc[0]['date']).days if not reached.empty else "N/A"
+            
+        acc_v3 = get_days_to_reach(df_v3)
+        acc_v4_1 = get_days_to_reach(df_v4_1)
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("V3 Balance", f"¥{m_v3:,.0f}")
+        c2.metric("V4 Balance", f"¥{m_v4:,.0f}", delta=f"vs V3: ¥{m_v4-m_v3:,.0f}")
+        c3.metric("V4.1 Balance", f"¥{m_v4_1:,.0f}", delta=f"vs V4: ¥{m_v4_1-m_v4:,.0f}")
+        c4.metric("Days to ¥200k", f"{acc_v4_1} days", delta=f"{acc_v3 - acc_v4_1} days faster" if isinstance(acc_v3, int) and isinstance(acc_v4_1, int) else "---")
 
         # Chart
         st.subheader("Asset Curve Comparison")
@@ -319,14 +331,15 @@ with tab_compound:
             'Date': df_v3['date'],
             'V2 (Old)': df_v2.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values,
             'V3 (Single)': df_v3['current_balance'].values,
-            'V4 (Hybrid)': df_v4.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values
+            'V4 (Hybrid)': df_v4.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values,
+            'V4.1 (Relaxed)': df_v4_1.set_index('date')['current_balance'].reindex(df_v3['date'], method='ffill').values
         }).set_index('Date')
         
-        st.line_chart(chart_data, color=["#FF4B4B", "#1f77b4", "#2ca02c"]) # Red, Blue, Green
+        st.line_chart(chart_data, color=["#FF4B4B", "#1f77b4", "#2ca02c", "#9467bd"]) # Red, Blue, Green, Purple
         
         # Data
-        with st.expander("View Daily Log (V4 Hybrid)"):
-            st.dataframe(df_v4)
+        with st.expander("View V4.1 Log"):
+            st.dataframe(df_v4_1)
             
     else:
         st.warning("Simulation files missing.")
