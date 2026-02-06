@@ -61,3 +61,15 @@ class CloudManager:
             # Fallback to Env if DB entry missing
             return input_pass == os.getenv("ADMIN_PASS")
         return input_pass == stored
+
+    def log_system_event(self, level, message, details=""):
+        try:
+            data = {
+                "level": level,
+                "message": message,
+                "details": str(details),
+                # timestamp defaults to now() in DB
+            }
+            self.client.table("system_logs").insert(data).execute()
+        except Exception as e:
+            print(f"[CloudManager] Log failed: {e}")

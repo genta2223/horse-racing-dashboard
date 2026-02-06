@@ -47,6 +47,7 @@ class Shopper:
         # These will be updated dynamically from CloudManager in the loop, logic moved to run_cycle
         self.driver = None
         self.total_spent = 0
+        self.alert_history = {} # Key: Error Signature, Value: Last Sent Timestamp
         
         # Mail config loaded from Environment (as before)
         self.mail_user = MAIL_SENDER
@@ -94,6 +95,68 @@ class Shopper:
         except:
             print("[ERROR] Login Step 2 Failed.")
             return False
+
+    def send_error_alert(self, exception_obj, context="General"):
+        """Sends a diagnostic email with Traceback and Screenshot (if possible)"""
+        now = datetime.datetime.now()
+        error_sig = f"{context}:{type(exception_obj).__name__}"
+        
+        # 1. Rate Limiting (1 Hour)
+        last_sent = self.alert_history.get(error_sig)
+        if last_sent:
+            if (now - last_sent).total_seconds() < 3600:
+                print(f"[ALERT] Suppressed redundant alert: {error_sig}")
+                return
+
+        print(f"[ALERT] Sending Error Report for: {error_sig}")
+        
+        # 2. Build Message
+        subject = f"🚨 JRA System Alert: {type(exception_obj).__name__}"
+        tb_str = "".join(traceback.format_tb(exception_obj.__traceback__))
+        
+        body = f"""
+        System Alert Report
+        ===================
+        Time: {now.strftime('%Y-%m-%d %H:%M:%S')}
+        Context: {context}
+        Error: {str(exception_obj)}
+        
+        Traceback:
+        {tb_str}
+        
+        Recover Advice:
+        - Check JRA Maintenance Hours
+        - Verify .env credentials (if Login failed)
+        - Check selector changes if ElementNotFound
+        """
+        
+        msg = MIMEMultipart()
+        msg['Subject'] = subject
+        msg['From'] = self.mail_user
+        msg['To'] = self.mail_to
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # 3. Attach Screenshot (if driver active)
+        if self.driver:
+            try:
+                screenshot = self.driver.get_screenshot_as_png()
+                image = MIMEImage(screenshot, name="error_state.png")
+                msg.attach(image)
+                print("[ALERT] Screenshot attached.")
+            except Exception as e:
+                print(f"[ALERT] Could not attach screenshot: {e}")
+
+        # 4. Send
+        try:
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(self.mail_user, self.mail_pass)
+            server.send_message(msg)
+            server.quit()
+            print("[ALERT] Sent successfully.")
+            self.alert_history[error_sig] = now
+        except Exception as e:
+            print(f"[ALERT] Mail Failed: {e}")
 
     def send_mail(self, subject, body):
         if not all([self.mail_user, self.mail_pass, self.mail_to]):

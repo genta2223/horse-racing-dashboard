@@ -77,19 +77,28 @@ def init_background_worker():
                 if is_active:
                     print("[BG] Auto Bet Active. Running cycle...")
                     # A. Run Prediction
-                    run_prediction_cycle()
+                    try:
+                        run_prediction_cycle()
+                    except Exception as e:
+                        print(f"[BG] Prediction Error: {e}")
+                        cm.log_system_event("ERROR", "Prediction Failed", str(e))
+                        # Optional: Alert for prediction too? Maybe less critical than shopping.
                     
                     # B. Run Shopper
-                    # Note: daily_cap is checked inside shopper, but we should update it
                     current_cap = cm.get_daily_cap()
-                    # We can pass limit to shopper or update env var logic in shopper
-                    shopper.check_and_buy(daily_limit_override=current_cap)
+                    try:
+                       shopper.check_and_buy(daily_limit_override=current_cap)
+                    except Exception as e:
+                       print(f"[BG] Shopper Critical Error: {e}")
+                       cm.log_system_event("CRITICAL", "Shopper Crashed", str(e))
+                       shopper.send_error_alert(e, context="Shopper Loop")
                 else:
                     print("[BG] Auto Bet INACTIVE. Sleeping...")
                 
                 time.sleep(60) # 1 min interval
             except Exception as e:
-                print(f"[BG] Error: {e}")
+                print(f"[BG] Global Loop Error: {e}")
+                cm.log_system_event("CRITICAL", "Global Loop Crashed", str(e))
                 time.sleep(60)
 
     t = threading.Thread(target=background_loop, daemon=True)
@@ -211,9 +220,37 @@ with tab_live:
 
 with tab_monitor:
     st.header("🔍 Live Action Monitor")
-    st.markdown("Real-time trading log and historical Trade/Pass decisions.")
     
-    # Load Logs
+    # --- System Alerts (Added) ---
+    st.subheader("🚨 System Logs & Alerts")
+    try:
+        # Fetch last 5 ERROR/CRITICAL logs
+        res_logs = supabase.table("system_logs")\
+            .select("*")\
+            .order("timestamp", desc=True)\
+            .limit(10)\
+            .execute()
+            
+        if res_logs.data:
+            df_logs = pd.DataFrame(res_logs.data)
+            # Filter for Errors (Visual)
+            st.dataframe(
+                df_logs[['timestamp', 'level', 'message', 'details']], 
+                use_container_width=True,
+                column_config={
+                    "timestamp": st.column_config.DatetimeColumn("Time", format="MM-DD HH:mm"),
+                    "level": st.column_config.TextColumn("Level"), 
+                    "message": st.column_config.TextColumn("Message"),
+                    "details": st.column_config.TextColumn("Details"),
+                }
+            )
+        else:
+            st.caption("No system logs found.")
+    except Exception as e:
+        st.error(f"Failed to fetch logs: {e}")
+
+    st.divider()
+    st.markdown("### 📜 Trade History")
     log_file = "trade_log_v4_1.csv"
     if os.path.exists(log_file):
         df_log = pd.read_csv(log_file)
