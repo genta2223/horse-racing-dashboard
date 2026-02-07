@@ -265,8 +265,77 @@ with tab_live:
                     })
         else:
             st.warning("No Data.")
-    except Exception as e:
         st.error(f"Error loading data: {e}")
+
+    # Results Verification (New)
+    st.subheader("🏆 Race Results (0B12)")
+    try:
+        # Fetch 0B12 data
+        res_results = supabase.table("raw_race_data").select("*").eq("data_type", "0B12").order("timestamp", desc=True).limit(50).execute()
+        
+        if res_results.data:
+            df_results = pd.DataFrame(res_results.data)
+            
+            # Parsing Helper
+            def parse_se_simple(line):
+                try:
+                    # Simple extraction based on fixed width (Heuristic)
+                    # SE record structure (approx):
+                    # HorseName: usually around col 34-52 ? (Shift-JIS byte based, but line is unicode here?)
+                    # If unicode, width varies. 
+                    # Use simple space split or look for Japanese text
+                    import re
+                    # Extract text parts (Horse Name)
+                    # Regex for Katakana name (approx)
+                    match = re.search(r'[ァ-ンー]{2,9}', line)
+                    name = match.group(0) if match else "Unknown"
+                    return name, line
+                except:
+                    return "Error", line
+
+            race_ids = df_results['race_id'].unique()
+            selected_result_race = st.selectbox("Select Race for Results:", race_ids)
+            
+            if selected_result_race:
+                race_data = df_results[df_results['race_id'] == selected_result_race]
+                
+                st.write(f"Results for {selected_result_race}")
+                
+                # Expand JSON content if needed, key is "content" -> JSON -> "record_type"
+                # But actual line data is raw?
+                # In upload_file: content = json({"record_type":...}), raw_string = b64
+                # Wait, step2_upload uploads raw_string as Base64. 
+                # We need to decode raw_string to see the line!
+                
+                import base64
+                
+                result_lines = []
+                for idx, row in race_data.iterrows():
+                    try:
+                        # raw_string is B64 encoded bytes of the line
+                        raw_b64 = row.get('raw_string')
+                        if raw_b64:
+                            raw_bytes = base64.b64decode(raw_b64)
+                            # decode as utf-8 (uploaded as utf-8 bytes from file line)
+                            line_str = raw_bytes.decode('utf-8', errors='replace')
+                            
+                            # Filter for SE records
+                            if line_str.startswith("SE"):
+                                result_lines.append(line_str)
+                    except Exception as ex:
+                        pass
+                
+                if result_lines:
+                    # Display as simple text for now
+                    st.text_area("Raw Result Data (SE Records)", "\n".join(result_lines), height=300)
+                else:
+                    st.info("No SE (Result) records found in this batch.")
+                    
+        else:
+            st.info("No Results (0B12) uploaded yet.")
+            
+    except Exception as e:
+        st.error(f"Error loading results: {e}")
 
 with tab_monitor:
     st.header("🔍 Live Action Monitor")
