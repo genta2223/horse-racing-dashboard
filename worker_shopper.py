@@ -82,6 +82,7 @@ class Shopper:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")  # Memory optimization
         options.add_argument("--disable-gpu")
+        options.add_argument("--single-process") # FIX: Prevent thread exhaustion (Errno 11)
         
         try:
             self.driver = webdriver.Chrome(
