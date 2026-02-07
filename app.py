@@ -184,9 +184,25 @@ with tab_commander:
 
     # 1. Fetch Race Schedule (0B15)
     try:
-        # Get all races for this date
+        # Get all races for this date (Order by race_id to group them)
         res_races = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", target_date_str).order("race_id").execute()
-        races = res_races.data if res_races.data else []
+        raw_data = res_races.data if res_races.data else []
+        
+        # Deduplicate by race_id (0B15 contains multiple records per race: RA header + SE horses)
+        # We only need one entry per race_id to show the schedule
+        unique_races = {}
+        for r in raw_data:
+            rid = r['race_id']
+            # Heuristic: 0B15 RA record often comes first or we just need any record to know race exists
+            # We key by the 12-digit or 14-digit core ID if possible, but let's stick to full RID provided
+            # Standardizing RID: JRA-VAN often uses 16 digits (YYYYMMDDJJKKNNRR) or 12 (YYYYMMDDJJRR)
+            # Let's clean it up for display
+            
+            # Key = race_id
+            if rid not in unique_races:
+                unique_races[rid] = r
+
+        sorted_rids = sorted(unique_races.keys())
         
         # Get Bets
         res_bets = supabase.table("bet_queue").select("*").in_("status", ["pending", "approved"]).execute()
@@ -195,32 +211,52 @@ with tab_commander:
         # Filter bets for date
         day_bets = [b for b in all_bets if target_date_str in b['race_id']]
         
-        if not races:
-            st.warning(f"⚠️ No Race Data (0B15) found for {target_date_str}. Please upload data.")
+        if not sorted_rids:
+            st.warning(f"⚠️ No Race Data (0B15) found for {target_date_str}. Please upload data using step2_upload.py.")
         else:
-            st.subheader(f"📅 Race Schedule & Recommendations ({len(races)} Races)")
+            st.subheader(f"📅 Race Schedule & Recommendations ({len(sorted_rids)} Races)")
             
-            # Create Merge View
-            for r in races:
-                rid = r['race_id']
-                # Parse basic info (Heuristic: Race num is last 2 digits usually)
-                # RID format: YYYYMMDDJJRR (e.g. 202602080511 -> Tokyo 11R)
-                # JJ: Jo Code (05=Tokyo), RR: Race No.
+            # Place Map
+            place_map = {
+                "01": "Sapporo", "02": "Hakodate", "03": "Fukushima", "04": "Niigata",
+                "05": "Tokyo", "06": "Nakayama", "07": "Chukyo", "08": "Kyoto", 
+                "09": "Hanshin", "10": "Kokura"
+            }
+            
+            for rid in sorted_rids:
+                # Parse Info
+                # 16-digit: YYYY(0:4) MM(4:6) DD(6:8) JJ(8:10) KK(10:12) NN(12:14) RR(14:16)
+                # 12-digit: YYYY(0:4) MM(4:6) DD(6:8) JJ(8:10) RR(10:12)
                 try:
-                    rr = rid[-2:]
-                    jj = rid[-4:-2]
-                    place_map = {"05": "Tokyo", "09": "Hanshin", "06": "Nakayama", "08": "Kyoto", "10": "Kokura", "07": "Chukyo"} # etc
-                    place = place_map.get(jj, f"Jo{jj}")
-                    race_label = f"{place} {rr}R"
+                    if len(rid) == 16:
+                        jj = rid[8:10]
+                        rr = rid[14:16]
+                    elif len(rid) >= 12:
+                        jj = rid[8:10]
+                        rr = rid[10:12] # Assuming 12 digit standard
+                    else:
+                        jj = "99"
+                        rr = "99"
+                    
+                    place_name = place_map.get(jj, f"Jo{jj}")
+                    race_num = int(rr)
+                    label = f"{place_name} {race_num}R"
                 except:
-                    race_label = rid
+                    label = rid
                 
-                # Find bets for this race
+                # Find bets
+                # Match simple containment because bets might use 12 or 16 digit ID
+                # Actually, predictor likely uses 16 digit if that's what is in DB
                 race_bets = [b for b in day_bets if b['race_id'] == rid]
                 
-                with st.expander(f"{race_label} (ID: {rid}) - {'✨ Recommended' if race_bets else 'No Signal'}", expanded=bool(race_bets)):
+                # Visual Indicator
+                status_icon = "🟢" if race_bets else "⚪"
+                status_text = f"**{len(race_bets)}** Bets" if race_bets else "No Signal"
+                
+                with st.expander(f"{status_icon} {label} 　|　 {status_text}", expanded=bool(race_bets)):
+                    st.caption(f"Race ID: {rid}")
                     if race_bets:
-                        # Editor for this race's bets
+                        # Editor
                         df_b = pd.DataFrame(race_bets)
                         df_b['Approve'] = df_b['approved'].fillna(False)
                         
@@ -235,12 +271,7 @@ with tab_commander:
                             key=f"editor_{rid}"
                         )
                         
-                        # Save inside expander? No, data_editor returns state.
-                        # We need a save button or rely on auto-update logic?
-                        # Streamlit data_editor update is tricky in loop.
-                        # Better to have global save or per-row instant process?
-                        # For stability, let's use a "Update Status" button per race
-                        if st.button(f"Update Approvals for {race_label}", key=f"btn_{rid}"):
+                        if st.button(f"Update Approvals for {label}", key=f"btn_{rid}"):
                             for idx, row in edited.iterrows():
                                 if row['Approve'] != df_b.iloc[idx]['approved']:
                                     supabase.table("bet_queue").update({
@@ -250,9 +281,8 @@ with tab_commander:
                             st.success("Updated!")
                             time.sleep(0.5)
                             st.rerun()
-
                     else:
-                        st.caption("No betting opportunities found by V4.1 Strategy.")
+                         st.info("No AI recommendations for this race.")
 
     except Exception as e:
         st.error(f"Error building Commander View: {e}")
