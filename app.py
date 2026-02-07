@@ -249,6 +249,10 @@ def render_horse_list(rid, df_merged):
     if df_race.empty:
         st.warning(f"No horses found for Race ID: {rid}")
         return
+    
+    # Sort by horse_num (convert to int for proper numeric sorting)
+    df_race['horse_num_int'] = pd.to_numeric(df_race['horse_num'], errors='coerce')
+    df_race = df_race.sort_values('horse_num_int').drop(columns=['horse_num_int'])
 
     # Map columns to localized names
     sex_map = {"1": "牡", "2": "牝", "3": "セ"}
