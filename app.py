@@ -84,7 +84,7 @@ def debug_container(component_id, title, func, *args, **kwargs):
 
 @st.cache_data(ttl=60)
 def fetch_todays_data(date_str):
-    if not supabase: return [], {}
+    if not supabase: return [], {}, {}
     try:
         # 1. Get 0B15 (Schedule/Horse Info)
         res_h = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
@@ -92,7 +92,7 @@ def fetch_todays_data(date_str):
         # 2. Get 0B30/31 (Odds)
         res_o = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B31").eq("race_date", date_str).execute()
         
-        # 3. Get 0B12 (Results)
+        # 3. Get 0B12 (Results - SE and HR)
         res_r = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B12").eq("race_date", date_str).execute()
         
         raw_horses = res_h.data if res_h.data else []
@@ -100,12 +100,29 @@ def fetch_todays_data(date_str):
         raw_results = res_r.data if res_r.data else []
         
         parsed_races = []
-        parsed_horses = {} # Key: race_id, Value: dict of horse dicts
+        parsed_horses = {}   # SE records (Merged)
+        parsed_payoffs = {}  # HR records
         
-        # Maps for Results and Odds
         import json
-        results_map = {r['race_id']: json.loads(r['content']) for r in raw_results}
+        
+        # Pre-process Odds
         odds_map = {r['race_id']: json.loads(r['content']) for r in raw_odds}
+        
+        # Pre-process Results (SE for ranking, HR for payoff)
+        result_se_map = {} # {race_id: {umaban: content}}
+        for r in raw_results:
+            rid = r['race_id']
+            try:
+                c = json.loads(r['content'])
+                rtype = c.get('record_type')
+                if rtype == 'HR':
+                    if rid not in parsed_payoffs: parsed_payoffs[rid] = []
+                    parsed_payoffs[rid].append(c)
+                elif rtype == 'SE':
+                    if rid not in result_se_map: result_se_map[rid] = {}
+                    uban = c.get('horse_num')
+                    if uban: result_se_map[rid][uban] = c
+            except: continue
 
         place_map = {
             "01": "Sapporo", "02": "Hakodate", "03": "Fukushima", "04": "Niigata",
@@ -113,9 +130,8 @@ def fetch_todays_data(date_str):
             "09": "Hanshin", "10": "Kokura"
         }
         
-        # Process 0B15 (Primary Source for Race List)
+        # Process 0B15 (Primary Source)
         seen_races = set()
-
         for r in raw_horses:
             rid = r['race_id']
             if not rid.startswith("20") or len(rid) < 14: continue 
@@ -124,41 +140,40 @@ def fetch_todays_data(date_str):
                 content_json = json.loads(r['content'])
                 rtype = content_json.get('record_type', 'SE')
                 
-                # --- RA: Race Header ---
-                if rtype == 'RA' or 'race_id' in content_json:
-                    if rid not in seen_races:
-                        jj = rid[8:10]
-                        race_num_val = int(rid[14:16])
-                        
-                        race_info = {
-                            "Race ID": rid,
-                            "Place": place_map.get(jj, f"Jo{jj}"),
-                            "Round": f"{race_num_val:02d}R",
-                            "Type": "0B15"
-                        }
-                        # Add Result Info if exists
-                        if rid in results_map:
-                            race_info["Winner"] = results_map[rid].get("rank_1_horse", "--")
-                            race_info["Payout"] = results_map[rid].get("pay_tan", 0)
+                # Race Header Logic
+                if rid not in seen_races:
+                    jj = rid[8:10]
+                    race_num_val = int(rid[14:16])
+                    race_info = {
+                        "Race ID": rid,
+                        "Place": place_map.get(jj, f"Jo{jj}"),
+                        "Round": f"{race_num_val:02d}R",
+                        "Type": "0B15"
+                    }
+                    # Add simple winner info to summary if payoff exists
+                    if rid in parsed_payoffs:
+                        # Assuming the first HR record has the pay_tan
+                        race_info["Payout"] = parsed_payoffs[rid][0].get("pay_tan", 0)
                             
-                        parsed_races.append(race_info)
-                        seen_races.add(rid)
+                    parsed_races.append(race_info)
+                    seen_races.add(rid)
                         
-                # --- SE: Horse Data ---
-                if 'horse_num' in content_json or rtype == 'SE':
-                    if rid not in parsed_horses:
-                        parsed_horses[rid] = {}
+                # Horse Data Logic (SE)
+                if rtype == 'SE':
+                    if rid not in parsed_horses: parsed_horses[rid] = {}
                     
                     horse_data = content_json.copy()
-                    horse_data['Race ID'] = rid
-                    
-                    # Align keys for display
                     umaban = str(horse_data.get('horse_num', horse_data.get('Umaban', '')))
                     horse_data['Umaban'] = umaban
+                    # Aliases for UIDf
                     horse_data['Horse'] = horse_data.get('horse_name', horse_data.get('Horse', ''))
                     horse_data['Jockey'] = horse_data.get('jockey', horse_data.get('Jockey', ''))
                     
-                    # Add Odds Info if exists
+                    # Merge Rank from 0B12-SE
+                    if rid in result_se_map and umaban in result_se_map[rid]:
+                        horse_data['Rank'] = result_se_map[rid][umaban].get('rank', '--')
+                    
+                    # Merge Odds from 0B31
                     if rid in odds_map:
                         odds_list = odds_map[rid].get("odds", [])
                         for o in odds_list:
@@ -170,14 +185,17 @@ def fetch_todays_data(date_str):
                         parsed_horses[rid][umaban] = horse_data
                         
             except:
-                import traceback
-                st.code(traceback.format_exc())
                 continue
         
-        # Convert parsed_horses dict-of-dicts to dict-of-lists
+        # Sort horses by Umaban
         final_horses = {k: sorted(list(v.values()), key=lambda x: x.get('Umaban', '99')) for k, v in parsed_horses.items()}
             
-        return parsed_races, final_horses
+        return parsed_races, final_horses, parsed_payoffs
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return [], {}, {}
     except Exception as e:
         st.error(f"Data Fetch Error: {e}")
         import traceback
@@ -264,7 +282,7 @@ def render_race_list(data, filters):
         return []
 
 def render_horse_list(filtered_rids, horses_map):
-    """ID: 004 Horse List"""
+    """ID: 004 Horse List (SE Records Only)"""
     st.write(f"🏇 **Horse List** (Targeting {len(filtered_rids)} Races)")
     
     if not filtered_rids:
@@ -275,16 +293,37 @@ def render_horse_list(filtered_rids, horses_map):
     all_horses = []
     for rid in filtered_rids:
         if rid in horses_map:
+            # Already sorted in fetch_todays_data
             all_horses.extend(horses_map[rid])
             
     if all_horses:
         st.write(f"Found {len(all_horses)} horses.")
         df = pd.DataFrame(all_horses)
-        # Display all columns (as requested)
-        st.dataframe(df, use_container_width=True)
+        # Ensure critical columns come first
+        cols = df.columns.tolist()
+        priority = ["Umaban", "Horse", "Jockey", "Odds", "Rank"]
+        cols = [c for c in priority if c in cols] + [c for c in cols if c not in priority]
+        st.dataframe(df[cols], use_container_width=True)
     else:
         st.warning("No horse (SE) data found for the selected races.")
 
+def render_payoff_data(filtered_rids, payoffs_map):
+    """New Component: Results (HR Records)"""
+    st.markdown("---")
+    with st.expander("📊 **Race Results (Payoff Data)**", expanded=False):
+        if not filtered_rids:
+            st.write("No race results loaded.")
+            return
+
+        all_payoffs = []
+        for rid in filtered_rids:
+            if rid in payoffs_map:
+                all_payoffs.extend(payoffs_map[rid])
+        
+        if all_payoffs:
+            st.dataframe(pd.DataFrame(all_payoffs), use_container_width=True)
+        else:
+            st.write("No payoff (HR) records found for filtered races.")
 
 # --- 3. Main Layout ---
 
@@ -296,7 +335,7 @@ def main():
     
     # Global Data Fetch
     date_str = now_jst.strftime("%Y%m%d")
-    todays_data, todays_horses = fetch_todays_data(date_str)
+    todays_data, todays_horses, todays_payoffs = fetch_todays_data(date_str)
     
     # Extract all possible keys for column selector
     all_keys = list(todays_data[0].keys()) if todays_data else ["Race ID", "Place", "Round"]
@@ -310,9 +349,12 @@ def main():
     # Component 002: Race List (Returns filtered RIDs)
     filtered_rids = debug_container("002", "Race List Area", render_race_list, todays_data, filters)
     
-    # Component 004: Horse List
+    # Component 004: Horse List (SE Only)
     if filtered_rids is not None:
         debug_container("004", "Horse List", render_horse_list, filtered_rids, todays_horses)
+        
+        # New: Payoff View
+        render_payoff_data(filtered_rids, todays_payoffs)
 
 if __name__ == "__main__":
     main()
