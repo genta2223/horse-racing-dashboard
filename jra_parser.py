@@ -6,73 +6,48 @@ class JRAParser:
         try:
             self.data = line_str.encode('cp932')
         except UnicodeEncodeError:
-            # Shift-JISでエンコードできない文字が含まれる場合は
-            # エラー回避のために utf-8 でエンコード (通常JRAデータでは発生しない)
             self.data = line_str.encode('utf-8', errors='replace')
 
     def get_str(self, start, length):
         """指定バイト位置を切り出し、cp932でデコードして空白除去"""
         try:
             chunk = self.data[start : start + length]
-            # decode時にエラー文字があれば '?' などに置き換える
             return chunk.decode('cp932', errors='replace').strip()
         except:
             return ""
 
     def parse(self, data_type):
-        """引数 data_type に応じて解析を行い、辞書を返す"""
+        """引数 data_type と Record Spec に応じて解析を行い、辞書を返す"""
         if data_type not in SPECS:
-            return {}
+            return None
             
-        # 先頭2バイトをレコード種別 (Record Spec) として取得
-        record_spec = self.get_str(0, 2)
+        spec_config = SPECS[data_type]
+        record_type = self.get_str(0, 2)
+        res = {"record_type": record_type}
         
-        # フィルタリングロジック:
-        # 0B15 (出馬表), 0B12 (成績) は馬データである 'SE' レコードのみを対象とする
-        if data_type == '0B15':
-            if record_spec != 'SE': return {}
-        elif data_type == '0B12':
-            if record_spec != 'SE': return {}
-        # 0B30/31 (オッズ) は 'O1', 'O2' などのオッズレコードのみを対象とする
-        elif data_type in ['0B30', '0B31']:
-            if not record_spec.startswith('O'): return {}
-
-        spec = SPECS[data_type]
-        res = {"record_spec": record_spec}
-        
-        if spec["type"] == "fixed":
-            # 固定長カラムの抽出
-            for col, pos in spec["columns"].items():
+        # 1. Selector 形式 (レコード種別ごとに定義が異なる場合)
+        if spec_config["type"] == "selector":
+            if record_type not in spec_config["specs"]:
+                return None # 定義にないレコード(RA等)はスキップ
+            
+            target_spec = spec_config["specs"][record_type]
+            for col, pos in target_spec["columns"].items():
                 res[col] = self.get_str(pos["start"], pos["len"])
-            
-            # race_id の追加処理 (仕様：Year(11,4) + Month(15,2) + Day(17,2) + Place(19,2) + Kai(21,2) + Nichi(23,2) + Race(25,2))
-            if "race_id_part" in res:
-                p = res["race_id_part"] # 0-27バイト
-                # ユーザー要求のRaceID構成：Year(11,4)...
-                # self.data から直接切り出す方が確実
-                year = self.get_str(11, 4)
-                month = self.get_str(15, 2)
-                day = self.get_str(17, 2)
-                place = self.get_str(19, 2)
-                kai = self.get_str(21, 2)
-                nichi = self.get_str(23, 2)
-                race = self.get_str(25, 2)
-                res["race_id"] = f"{year}{month}{day}{place}{kai}{nichi}{race}"
                 
-        elif spec["type"] == "loop":
-            # ループ構造 (オッズ等)
-            header_len = spec["header_len"]
-            item_len = spec["item_len"]
-            
-            # race_id (オッズデータもヘッダー構成は同じ)
-            year = self.get_str(11, 4)
-            month = self.get_str(15, 2)
-            day = self.get_str(17, 2)
-            place = self.get_str(19, 2)
-            kai = self.get_str(21, 2)
-            nichi = self.get_str(23, 2)
-            race = self.get_str(25, 2)
-            res["race_id"] = f"{year}{month}{day}{place}{kai}{nichi}{race}"
+        # 2. Fixed 形式 (単独レコード)
+        elif spec_config["type"] == "fixed":
+            # 有効なレコード種別のチェック
+            valid_types = spec_config.get("valid_record_types", [])
+            if valid_types and record_type not in valid_types:
+                return None
+                
+            for col, pos in spec_config["columns"].items():
+                res[col] = self.get_str(pos["start"], pos["len"])
+                
+        # 3. Loop 形式 (オッズデータ等)
+        elif spec_config["type"] == "loop":
+            header_len = spec_config["header_len"]
+            item_len = spec_config["item_len"]
             
             # 登録頭数 (通常55-57バイト目にある)
             reg_horses_str = self.get_str(55, 2)
@@ -86,10 +61,21 @@ class JRAParser:
                     break
                     
                 item_data = {}
-                for col, pos in spec["columns"].items():
+                for col, pos in spec_config["columns"].items():
                     item_data[col] = self.get_str(item_start + pos["start"], pos["len"])
                 items.append(item_data)
             
             res["odds"] = items
+
+        # 共通処理: race_id の生成 (全種別共通のバイト位置 11-26を使用)
+        if "race_id" not in res:
+            year = self.get_str(11, 4)
+            month = self.get_str(15, 2)
+            day = self.get_str(17, 2)
+            place = self.get_str(19, 2)
+            kai = self.get_str(21, 2)
+            nichi = self.get_str(23, 2)
+            race = self.get_str(25, 2)
+            res["race_id"] = f"{year}{month}{day}{place}{kai}{nichi}{race}"
             
         return res

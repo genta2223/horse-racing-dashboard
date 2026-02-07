@@ -60,6 +60,10 @@ def process_and_upload():
             parser = JRAParser(line)
             parsed_content = parser.parse(data_type)
             
+            # None の場合はスキップ
+            if parsed_content is None:
+                continue
+            
             race_id = parsed_content.get("race_id")
             if not race_id or race_id == "UNKNOWN": 
                 continue
