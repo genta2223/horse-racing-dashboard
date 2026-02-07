@@ -68,13 +68,13 @@ class JVDownloader:
                 self.jv.JVClose()
             return 0
         
-        # Output file path
+        # Output file path (Binary)
         output_file = os.path.join(OUTPUT_DIR, f"{dataspec}_{date_str}.txt")
         
         count = 0
         
-        # Open file for writing with UTF-8 encoding
-        with open(output_file, "w", encoding="utf-8", errors="replace") as f:
+        # Open file for writing in BINARY mode to preserve Byte Map precision
+        with open(output_file, "wb") as f:
             while True:
                 try:
                     # JVRead returns (ret_code, buffer, filename)
@@ -82,10 +82,11 @@ class JVDownloader:
                     
                     if isinstance(read_res, tuple):
                         ret_code = read_res[0]
-                        raw_data = str(read_res[1]).strip() if read_res[1] else ""
+                        # Use the RAW buffer (bytes)
+                        raw_data = read_res[1]
                     else:
                         ret_code = read_res
-                        raw_data = ""
+                        raw_data = None
                     
                     # End conditions
                     if ret_code == 0:  # No more data
@@ -98,8 +99,12 @@ class JVDownloader:
                     
                     if ret_code > 0 and raw_data:
                         count += 1
-                        # Write record to file
-                        f.write(raw_data + "\n")
+                        # If raw_data is a string, encode it back to cp932
+                        # to maintain fixed-width byte offsets in the binary file.
+                        if isinstance(raw_data, str):
+                            raw_data = raw_data.encode('cp932', errors='replace')
+                        
+                        f.write(raw_data)
                         print(f"   Downloaded {count} records...", end="\r")
                         
                 except Exception as e:

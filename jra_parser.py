@@ -27,10 +27,10 @@ class JRAParser:
         # 0B15 (出馬表): SE かつ データ区分 '7' (確定) のみ許可
         if data_type == "0B15":
             if record_type != "SE":
-                return None # Skip non-SE records silently (e.g., RA)
-            if data_div != "7":
-                # データ区分が '7' でない場合は警告を出して弾く
-                print(f"[REJECTED] Skipped invalid data type: {record_type}{data_div} (Strictly SE7 only)")
+                return None
+            if data_div not in ["2", "7"]:
+                # '2'(前日) または '7'(確定) のみを許可
+                print(f"[REJECTED] Skipped invalid data div: {record_type}{data_div} (Strictly 2 or 7 only)")
                 return None
 
         # 0B12 (成績): SE または HR のみ許可

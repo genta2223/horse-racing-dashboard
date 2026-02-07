@@ -45,7 +45,8 @@ def process_and_upload():
             continue
 
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            # Open in binary mode to preserve original Shift-JIS / Byte Map layout
+            with open(file_path, "rb") as f:
                 lines = f.readlines()
         except Exception as e:
             print(f"   Error reading file: {e}")
@@ -53,10 +54,10 @@ def process_and_upload():
             
         records = []
         for line in lines:
-            line = line.strip()
+            # Keep original bytes without stripping (fixed length records)
             if not line: continue
             
-            # JRAParser を使用してパース
+            # JRAParser handles bytes directly now
             parser = JRAParser(line)
             parsed_content = parser.parse(data_type)
             
@@ -69,12 +70,13 @@ def process_and_upload():
                 continue
             
             # Content カラムに辞書データを格納
+            # raw_string カラムにはオリジナルのバイナリをBase64で保存
             record = {
                 "race_id": race_id,
                 "race_date": date_str,
                 "data_type": data_type,
                 "content": json.dumps(parsed_content, ensure_ascii=False),
-                "raw_string": base64.b64encode(line.encode('utf-8')).decode('utf-8')
+                "raw_string": base64.b64encode(line).decode('utf-8')
             }
             records.append(record)
             
