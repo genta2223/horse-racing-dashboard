@@ -109,9 +109,50 @@ def render_race_list(filter_selection):
     """ID: 002 Race List Area"""
     st.write(f"📋 **Race List** (Filter: `{filter_selection}`)")
     
-    # Placeholder
-    st.info("Waiting for race data...")
-    st.caption("Detailed race cards will be rendered here.")
+    # Fetch Data
+    date_str = now_jst.strftime("%Y%m%d")
+    if not supabase:
+        st.error("DB Not Connected")
+        return
+
+    try:
+        # Get 0B15 (Schedule/Race Info)
+        res = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
+        races = res.data if res.data else []
+        
+        if not races:
+            st.warning(f"No 0B15 data found for {date_str}.")
+            return
+            
+        # Process Data
+        valid_races = []
+        for r in races:
+            rid = r['race_id']
+            if not rid.startswith("20"): continue # Skip garbage
+            
+            # Simple Place Parsing from ID (YYYYMMDDJJRR)
+            # JJ is 8:10
+            jj = rid[8:10]
+            
+            # Filter Logic
+            if filter_selection == "Tokyo (05)" and jj != "05": continue
+            if filter_selection == "Kyoto (08)" and jj != "08": continue
+            if filter_selection == "Kokura (10)" and jj != "10": continue
+            
+            valid_races.append({
+                "Race ID": rid,
+                "Place Code": jj,
+                "Race Num": rid[10:12] if len(rid) >= 12 else "??",
+                "Raw Content (Partial)": r['content'][:50] + "..." if r['content'] else ""
+            })
+            
+        if valid_races:
+            st.dataframe(valid_races, use_container_width=True)
+        else:
+            st.info("No races match the filter.")
+
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
 
 # --- 3. Main Layout ---
 
