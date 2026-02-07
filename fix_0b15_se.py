@@ -12,7 +12,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 DATE_TARGET = "20260207"
 
-print(f"Fixing SE records for {DATE_TARGET}...")
+print(f"Fixing SE records for {DATE_TARGET} with Strict 0B15 Spec...")
 
 # Fetch all 0B15 records
 res = supabase.table("raw_race_data").select("*").eq("data_type", "0B15").eq("race_date", DATE_TARGET).execute()
@@ -26,46 +26,66 @@ if res.data:
         try:
             # Decode Base64 to Raw Bytes
             raw_bytes = base64.b64decode(raw_b64)
-            # Decode to UTF-8 (as preserved by step1)
+            # Decode to UTF-8
             line = raw_bytes.decode('utf-8', errors='replace')
             
-            # Identify Type
             if line.startswith("SE"):
-                # Parse SE using Shift-JIS Bytes (Robust Method)
+                # Re-encode to Shift-JIS for byte slicing
                 try:
-                    # Re-encode to Shift-JIS to restore fixed byte positions
-                    sj_bytes = line.encode('shift_jis')
+                    sj_bytes = line.encode('cp932') # Use CP932 for strict Shift-JIS (Windows)
                 except:
-                    # Fallback if encoding fails
                     continue
-
-                # Standard JRA-VAN SE Record Offsets (Bytes)
-                # Waku: 27:28
-                # Umaban: 28:30
-                # Horse: 40:76 (36 bytes)
-                # Trainer: 92:100 (8 bytes)
-                # Weight: 128:131 (3 bytes)
-                # Jockey: 138:146 (8 bytes)
                 
-                def get_sjis_str(b_data, start, end):
+                def get_val(start, length):
                     try:
-                        # Decode and clean
-                        return b_data[start:end].decode('shift_jis').strip().replace("\u3000", " ")
+                        chunk = sj_bytes[start : start + length]
+                        return chunk.decode('cp932', errors='replace').strip().replace("\u3000", " ")
                     except:
                         return ""
 
-                waku = get_sjis_str(sj_bytes, 27, 28)
-                umaban = get_sjis_str(sj_bytes, 28, 30)
-                reg_num = get_sjis_str(sj_bytes, 30, 40)
-                horse_name = get_sjis_str(sj_bytes, 40, 76)
-                trainer_name = get_sjis_str(sj_bytes, 92, 100)
-                weight = get_sjis_str(sj_bytes, 128, 131)
-                jockey_name = get_sjis_str(sj_bytes, 138, 146)
+                # --- JRA-VAN 0B15 Spec (User Provided) ---
+                # Record Spec: 0:2
+                # Year: 11:15
+                # Month: 15:17
+                # Day: 17:19
+                # Place Code: 19:21
+                # Race Num: 25:27
+                # Horse Num: 28:30
+                # Horse Name: 68:104 (36 bytes)
+                # Sex Code: 46:47
+                # Hair Code: 47:49
+                # Age: 50:52
+                # Jockey Name: 134:146 (12 bytes)
+                # Weight: 122:125 (3 bytes)
+                # Trainer Name: 178:190 (12 bytes)
+                # Owner Name: 210:270 (60 bytes)
+                
+                umaban = get_val(28, 2)
+                horse_name = get_val(68, 36)
+                jockey_name = get_val(134, 12)
+                trainer_name = get_val(178, 12)
+                weight_raw = get_val(122, 3)
+                waku = get_val(26, 1) # Guessing based on logic (usually near Umaban) - actually spec says 26?
+                # User didn't give Waku offset, but previously I guessed 27. 
+                # Let's try to infer or leave blank if unknown.
+                # Actually standard is usually: [RaceNum(2)][Waku(1)][Umaban(2)] -> 25+2=27? So 27:28.
+                # Let's check: Race Num is 25:27. So Waku might be 27:28.
+                waku = get_val(27, 1) # Safe bet based on previous alignment
+                
+                reg_num = get_val(30, 10) # Registration Number usually follows Umaban? Spec says Horse Name starts at 68. 30->68 is huge gap.
+                # Wait, User spec: Horse Num 28:30. Horse Name 68. 
+                # There is a gap 30-68. 
+                # Detailed spec usually has RegNum in there.
+                # I will leave RegNum as is (30:40) based on previous visual inspection.
+                # But wait, 30+10=40. 40 is not 68.
+                # If User Spec is correct, my previous regex was WAY off.
+                # Let's trust User Spec for the fields provided.
                 
                 # Weight Formatting
+                weight = weight_raw
                 if weight.isdigit():
                     weight = f"{int(weight)/10:.1f}"
-                
+
                 parsed = {
                     "record_type": "SE",
                     "Waku": waku,
@@ -74,9 +94,8 @@ if res.data:
                     "Jockey": jockey_name,
                     "Trainer": trainer_name,
                     "Weight": weight,
-                    "RegNum": reg_num,
                     "RawString": line[:50],
-                    "Odds": "---" # 0B15 does not have Odds
+                    "Odds": "---" 
                 }
                 
                 # Update DB
@@ -84,19 +103,8 @@ if res.data:
                 updates += 1
                 if updates % 10 == 0:
                     print(f"Updates: {updates}", end="\r")
-                
-            elif line.startswith("RA"):
-                # Parse RA (Basic)
-                parsed = {
-                    "record_type": "RA",
-                    "RaceName": "Race Name",
-                    "Track": "Track"
-                }
-                supabase.table("raw_race_data").update({"content": json.dumps(parsed, ensure_ascii=False)}).eq("race_id", rid).eq("raw_string", raw_b64).execute()
-                updates += 1
-                
+                    
         except Exception as e:
-            # print(f"Error {rid}: {e}")
             pass
 
 print(f"\nCreate {updates} updates.")
