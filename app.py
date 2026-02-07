@@ -256,7 +256,14 @@ def render_horse_list(rid, df_merged):
 
     # Map columns to localized names
     sex_map = {"1": "牡", "2": "牝", "3": "セ"}
-    df_race['SexAge'] = df_race.apply(lambda r: f"{sex_map.get(str(r.get('sex_code')), '')}{r.get('age', '')}", axis=1)
+    def format_sex_age(row):
+        sex = sex_map.get(str(row.get('sex_code')), '')
+        try:
+            age = int(row.get('age'))
+        except:
+            age = row.get('age', '')
+        return f"{sex}{age}"
+    df_race['SexAge'] = df_race.apply(format_sex_age, axis=1)
     
     col_map = {
         "waku": "枠",
