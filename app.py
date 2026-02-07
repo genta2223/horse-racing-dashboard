@@ -193,6 +193,10 @@ with tab_commander:
         unique_races = {}
         for r in raw_data:
             rid = r['race_id']
+            # Filter garbage IDs from previous bad uploads (must start with 202x)
+            if not rid.startswith("20"):
+                continue
+                
             # Heuristic: 0B15 RA record often comes first or we just need any record to know race exists
             # We key by the 12-digit or 14-digit core ID if possible, but let's stick to full RID provided
             # Standardizing RID: JRA-VAN often uses 16 digits (YYYYMMDDJJKKNNRR) or 12 (YYYYMMDDJJRR)

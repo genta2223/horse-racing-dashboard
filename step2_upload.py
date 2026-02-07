@@ -60,10 +60,15 @@ def upload_to_supabase(payload: dict) -> bool:
 def parse_race_id(raw_data: str) -> str:
     """Extract race_id from JV-Link record (ASCII only)"""
     try:
-        if len(raw_data) < 20:
+        if len(raw_data) < 27:
             return None
-        # Extract characters 2-18, filter to ASCII only
-        race_id_raw = raw_data[2:18]
+        # Extract characters 11-27 (16 chars): YYYYMMDDJJRR...
+        # Spec 0B15 RA/SE:
+        # 0: RecordSpec(2)
+        # 2: DataKubun(1)
+        # 3: MakeDate(8)
+        # 11: RaceDate(8) + Jo(2) + Kai(2) + Nichi(2) + RaceNum(2) = 16 bytes
+        race_id_raw = raw_data[11:27]
         return ''.join(c for c in race_id_raw if ord(c) < 128)
     except:
         return None
