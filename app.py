@@ -277,6 +277,9 @@ def render_horse_list(rid, df_merged):
         df_display['単勝'] = pd.to_numeric(df_display['単勝'], errors='coerce') / 10.0
     if "人気" in df_display.columns:
         df_display['人気'] = pd.to_numeric(df_display['人気'], errors='coerce')
+    # Format weight (recorded as 10x integer, e.g. 550 = 55.0 kg)
+    if "斤量" in df_display.columns:
+        df_display['斤量'] = pd.to_numeric(df_display['斤量'], errors='coerce') / 10.0
 
     st.dataframe(
         df_display,
@@ -287,6 +290,7 @@ def render_horse_list(rid, df_merged):
             "人気": st.column_config.NumberColumn("人気", format="%d"),
             "枠": st.column_config.TextColumn("枠", width="small"),
             "番": st.column_config.TextColumn("番", width="small"),
+            "斤量": st.column_config.NumberColumn("斤量", format="%.1f kg"),
         }
     )
 
