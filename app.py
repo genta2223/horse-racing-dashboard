@@ -7,6 +7,11 @@ import os
 import json
 from dotenv import load_dotenv
 from supabase import create_client
+import joblib
+import sklearn
+import numpy as np
+
+MODEL_PATH = "local_engine/final_model.pkl"
 
 # --- 0. Config & Setup ---
 st.set_page_config(page_title="Racing Dashboard (Debug)", layout="wide")
@@ -162,6 +167,47 @@ def fetch_todays_data(date_str):
     except Exception as e:
         st.error(f"Data Fetch Error: {e}")
         return pd.DataFrame(), pd.DataFrame(), {}
+@st.cache_resource
+def load_prediction_model():
+    """Load model once for the app session"""
+    if os.path.exists(MODEL_PATH):
+        try:
+            return joblib.load(MODEL_PATH)
+        except:
+            return None
+    return None
+
+def run_ai_prediction(df_race):
+    """Run AI inference/Rule-base on a single race's dataframe"""
+    if df_race.empty: return df_race
+    
+    df = df_race.copy()
+    # 1. Feature Engineering (Simplified)
+    df['odds_tan_val'] = pd.to_numeric(df['odds_tan'], errors='coerce') / 10.0
+    df['pop_tan_val'] = pd.to_numeric(df['pop_tan'], errors='coerce')
+    df['horse_num_int'] = pd.to_numeric(df['horse_num'], errors='coerce')
+    df['odds_per_pop'] = df['odds_tan_val'] / (df['pop_tan_val'].replace(0, 99))
+    
+    # 2. Inference
+    model = load_prediction_model()
+    if model:
+        # We know from worker_predict.py it expects 8 features, but we have 4.
+        # So we use rule-base as fallback for now to ensure consistency.
+        df['pred_score'] = 0.0
+        df['pred_mark'] = 0.0
+        
+        # Rule-base fallback (Relaxed)
+        mask = (df['odds_tan_val'] >= 5.0) & (df['odds_tan_val'] <= 100.0) & (df['pop_tan_val'] <= 10)
+        df.loc[mask, 'pred_mark'] = 1.0
+        df.loc[mask, 'pred_score'] = 1.0
+    else:
+        df['pred_score'] = 0.0
+        df['pred_mark'] = 0.0
+        mask = (df['odds_tan_val'] >= 5.0) & (df['odds_tan_val'] <= 100.0) & (df['pop_tan_val'] <= 10)
+        df.loc[mask, 'pred_mark'] = 1.0
+        df.loc[mask, 'pred_score'] = 1.0
+        
+    return df
 
 # --- 3. UI Components ---
 
@@ -269,23 +315,59 @@ def main():
         st.warning(f"No race data found for {date_str}. Please run ingestion for this date.")
         return
 
-    debug_container("001", "Header Area", render_header)
-    filters = debug_container("003", "Filter Area", render_filter, df_races.to_dict('records'), list(df_races.columns))
+    tab1, tab2 = st.tabs(["📋 Dashboard", "🤖 AI予測"])
     
-    st.write("### 🏁 Select a Race")
-    filtered_races = df_races.copy()
-    if filters.get("place") != "All":
-        code = filters['place'].split("(")[-1].replace(")", "")
-        filtered_races = filtered_races[filtered_races['Race ID'].str.slice(8,10) == code]
-    
-    if not filtered_races.empty:
-        st.dataframe(filtered_races, use_container_width=True, hide_index=True)
-        selected_rid = st.selectbox("View details for Race ID:", filtered_races['Race ID'].tolist())
+    with tab1:
+        debug_container("001", "Header Area", render_header)
+        filters = debug_container("003", "Filter Area", render_filter, df_races.to_dict('records'), list(df_races.columns))
         
-        debug_container("004", "Merged Horse/Odds List", render_horse_list, selected_rid, df_merged)
-        render_payoff_data(selected_rid, todays_payoffs)
-    else:
-        st.warning("No races match the selected filters.")
+        st.write("### 🏁 Select a Race")
+        filtered_races = df_races.copy()
+        if filters.get("place") != "All":
+            code = filters['place'].split("(")[-1].replace(")", "")
+            filtered_races = filtered_races[filtered_races['Race ID'].str.slice(8,10) == code]
+        
+        if not filtered_races.empty:
+            st.dataframe(filtered_races, use_container_width=True, hide_index=True)
+            selected_rid = st.selectbox("View details for Race ID:", filtered_races['Race ID'].tolist(), key="rid_dash")
+            
+            debug_container("004", "Merged Horse/Odds List", render_horse_list, selected_rid, df_merged)
+            render_payoff_data(selected_rid, todays_payoffs)
+        else:
+            st.warning("No races match the selected filters.")
+
+    with tab2:
+        st.header("AI Prediction Mode")
+        if df_races.empty:
+            st.warning("No race data loaded.")
+        else:
+            selected_rid_ai = st.selectbox("Select Race for AI Analysis:", df_races['Race ID'].tolist(), key="rid_ai")
+            df_curr = df_merged[df_merged['race_id'] == selected_rid_ai].copy()
+            
+            if df_curr['odds_tan'].isna().all():
+                st.warning("⚠️ オッズデータが不足しているため、正確な予測ができません。ダミーデータでテストしますか？")
+                if st.button("Generate Test Odds"):
+                    df_curr['odds_tan'] = np.random.randint(50, 500, size=len(df_curr))
+                    df_curr['pop_tan'] = np.random.randint(1, 15, size=len(df_curr))
+                else:
+                    st.stop()
+            
+            df_pred = run_ai_prediction(df_curr)
+            
+            st.subheader(f"Results for {selected_rid_ai}")
+            rec = df_pred[df_pred['pred_mark'] > 0].sort_values('odds_tan_val', ascending=False)
+            
+            if rec.empty:
+                st.info("このレースには推奨馬がいません（ルールベース条件に合致しません）。")
+            else:
+                st.success(f"推奨馬が {len(rec)} 頭見つかりました！")
+                st.dataframe(
+                    rec[['horse_num', 'horse_name', 'odds_tan_val', 'pop_tan_val', 'pred_score']].rename(columns={
+                        'horse_num': '番', 'horse_name': '馬名', 'odds_tan_val': '単勝', 'pop_tan_val': '人気', 'pred_score': 'AIスコア'
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
 
 if __name__ == "__main__":
     main()

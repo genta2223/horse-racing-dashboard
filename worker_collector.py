@@ -222,8 +222,6 @@ class DataUploader:
                         "race_date": date_str,
                         "content": json.dumps(parsed_data, ensure_ascii=True),
                         "raw_string": safe_raw,  # Base64 encoded
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "status": "pending"
                     }
                     
                     # DEBUG: Verify all fields are ASCII
@@ -289,6 +287,8 @@ class DataUploader:
         # Verified working in JV-Link verification tool
         specs = [
             ("0B15", "Race Card (速報レース情報)"),
+            ("0B31", "Tan/Fuku Odds (単複オッズ)"),
+            ("0B32", "Ren Odds (連勝オッズ)"),
         ]
         
         total_uploaded = 0
