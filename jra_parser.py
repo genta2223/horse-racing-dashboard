@@ -24,8 +24,21 @@ class JRAParser:
         if data_type not in SPECS:
             return {}
             
+        # 先頭2バイトをレコード種別 (Record Spec) として取得
+        record_spec = self.get_str(0, 2)
+        
+        # フィルタリングロジック:
+        # 0B15 (出馬表), 0B12 (成績) は馬データである 'SE' レコードのみを対象とする
+        if data_type == '0B15':
+            if record_spec != 'SE': return {}
+        elif data_type == '0B12':
+            if record_spec != 'SE': return {}
+        # 0B30/31 (オッズ) は 'O1', 'O2' などのオッズレコードのみを対象とする
+        elif data_type in ['0B30', '0B31']:
+            if not record_spec.startswith('O'): return {}
+
         spec = SPECS[data_type]
-        res = {}
+        res = {"record_spec": record_spec}
         
         if spec["type"] == "fixed":
             # 固定長カラムの抽出
