@@ -178,7 +178,7 @@ else:
         st.sidebar.caption("🔒 Enter Password to Change Settings")
 
 # --- Main Page Tabs ---
-tab_live, tab_monitor, tab_compound = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor", "📈 Compound Sim (2023-25)"])
+tab_live, tab_monitor = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor"])
 
 with tab_live:
     # Critical Alert System
@@ -227,13 +227,46 @@ with tab_live:
     # Odds Monitor
     st.subheader("📈 Odds Monitor")
     try:
-        res_raw = supabase.table("raw_race_data").select("*").order("created_at", desc=True).limit(5).execute()
+        res_raw = supabase.table("raw_race_data").select("*").order("timestamp", desc=True).limit(20).execute()
         if res_raw.data:
-            st.dataframe(pd.DataFrame(res_raw.data)[['created_at', 'data_type', 'race_id']])
+            df_raw = pd.DataFrame(res_raw.data)
+            # Convert timestamp to JST
+            if 'timestamp' in df_raw.columns:
+                df_raw['timestamp'] = pd.to_datetime(df_raw['timestamp'])
+                if df_raw['timestamp'].dt.tz is None:
+                    df_raw['timestamp'] = df_raw['timestamp'].dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
+                else:
+                    df_raw['timestamp'] = df_raw['timestamp'].dt.tz_convert('Asia/Tokyo')
+                df_raw['time_jst'] = df_raw['timestamp'].dt.strftime('%m-%d %H:%M')
+            
+            # Display selectable table
+            st.dataframe(
+                df_raw[['time_jst', 'data_type', 'race_id', 'race_date']],
+                use_container_width=True,
+                column_config={
+                    "time_jst": st.column_config.TextColumn("Time (JST)"),
+                    "data_type": st.column_config.TextColumn("Type"),
+                    "race_id": st.column_config.TextColumn("Race ID"),
+                    "race_date": st.column_config.TextColumn("Date"),
+                }
+            )
+            
+            # Data Details Expander
+            with st.expander("📋 View Raw Data Details"):
+                selected_race = st.selectbox("Select Race ID:", df_raw['race_id'].unique())
+                if selected_race:
+                    selected_data = df_raw[df_raw['race_id'] == selected_race].iloc[0]
+                    st.json({
+                        "race_id": selected_data.get('race_id'),
+                        "data_type": selected_data.get('data_type'),
+                        "race_date": selected_data.get('race_date'),
+                        "content": selected_data.get('content', 'N/A'),
+                        "timestamp": str(selected_data.get('timestamp')),
+                    })
         else:
             st.warning("No Data.")
-    except:
-        pass
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
 
 with tab_monitor:
     st.header("🔍 Live Action Monitor")
@@ -313,6 +346,4 @@ with tab_monitor:
     except Exception as e:
         st.error(f"Failed to fetch trade history: {e}")
 
-with tab_compound:
-    st.header("Compound Simulation")
-    st.info("V4.1 Simulation Comparison available in previous version.")
+
