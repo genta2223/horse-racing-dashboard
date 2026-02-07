@@ -72,10 +72,14 @@ def process_and_upload():
             if not race_id or race_id == "UNKNOWN": 
                 continue
             
+            # 馬番を取得して一意キーに含める
+            horse_num = parsed_content.get("horse_num", "00")
+            unique_key = f"{race_id}_{data_type}_{horse_num}"
+            
             # Content カラムに辞書データを格納 (ensure_ascii=False で日本語を維持)
             # raw_string カラムにはオリジナルのバイナリをBase64で保存
             record = {
-                "race_id": race_id,
+                "race_id": unique_key,  # race_id + data_type + horse_num で一意キーに
                 "race_date": date_str,
                 "data_type": data_type,
                 "content": json.dumps(parsed_content, ensure_ascii=False),

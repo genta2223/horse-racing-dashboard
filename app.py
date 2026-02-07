@@ -101,10 +101,13 @@ def fetch_todays_data(date_str):
         }
 
         for r in (res_h.data if res_h.data else []):
-            rid = r['race_id']
             try:
                 c = json.loads(r['content'])
                 if c.get('record_type') == 'SE':
+                    # Use race_id from parsed content, not from DB column (which is now unique key)
+                    rid = c.get('race_id', '')
+                    if not rid:
+                        continue
                     h_row = c.copy()
                     h_row['race_id'] = rid
                     # Standardize umaban for merge (usually 2 chars with leading zero)
