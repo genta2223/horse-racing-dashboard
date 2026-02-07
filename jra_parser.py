@@ -34,9 +34,17 @@ class JRAParser:
         res["race_id"] = f"{year}{month}{day}{place}{kai}{nichi}{race}"
 
         if data_type == '0B15':
-            res["horse_num"] = self.get_str(28, 2)
-            res["horse_name"] = self.get_str(68, 36)
-            res["jockey"] = self.get_str(134, 12)
+            res["Umaban"] = self.get_str(28, 2)
+            res["horse_num"] = res["Umaban"] # Alias for consistency
+            res["Horse"] = self.get_str(68, 36) 
+            res["horse_name"] = res["Horse"] # Alias
+            res["Jockey"] = self.get_str(134, 12)
+            res["jockey"] = res["Jockey"] # Alias
+            res["Trainer"] = self.get_str(178, 12)
+            res["Weight"] = self.get_str(122, 3)
+            # 斤量は10倍された値なので変換
+            if res["Weight"].isdigit():
+                res["Weight"] = f"{int(res['Weight'])/10:.1f}"
             
         elif data_type == '0B12':
             res["rank_1_horse"] = self.get_str(148, 2)

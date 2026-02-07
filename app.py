@@ -86,62 +86,92 @@ def debug_container(component_id, title, func, *args, **kwargs):
 def fetch_todays_data(date_str):
     if not supabase: return [], {}
     try:
-        # Get 0B15 (Schedule)
-        res = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
-        raw_rows = res.data if res.data else []
+        # 1. Get 0B15 (Schedule/Horse Info)
+        res_h = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
+        
+        # 2. Get 0B30/31 (Odds)
+        res_o = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B31").eq("race_date", date_str).execute()
+        
+        # 3. Get 0B12 (Results)
+        res_r = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B12").eq("race_date", date_str).execute()
+        
+        raw_horses = res_h.data if res_h.data else []
+        raw_odds = res_o.data if res_o.data else []
+        raw_results = res_r.data if res_r.data else []
         
         parsed_races = []
-        parsed_horses = {} # Key: race_id, Value: list of horse dicts
-        seen_ids = set()
+        parsed_horses = {} # Key: race_id, Value: dict of horse dicts
         
+        # Maps for Results and Odds
+        import json
+        results_map = {r['race_id']: json.loads(r['content']) for r in raw_results}
+        odds_map = {r['race_id']: json.loads(r['content']) for r in raw_odds}
+
         place_map = {
             "01": "Sapporo", "02": "Hakodate", "03": "Fukushima", "04": "Niigata",
             "05": "Tokyo", "06": "Nakayama", "07": "Chukyo", "08": "Kyoto", 
             "09": "Hanshin", "10": "Kokura"
         }
         
-        import json
+        # Process 0B15 (Primary Source for Race List)
+        seen_races = set()
 
-        for r in raw_rows:
+        for r in raw_horses:
             rid = r['race_id']
             if not rid.startswith("20") or len(rid) < 14: continue 
             
             try:
                 content_json = json.loads(r['content'])
-                rtype = content_json.get('record_type')
+                rtype = content_json.get('record_type', 'SE')
                 
                 # --- RA: Race Header ---
-                if rtype == 'RA':
-                    if rid in seen_ids: continue
-                    seen_ids.add(rid)
-
-                    jj = rid[8:10]
-                    race_num_val = int(rid[14:16])
-                    
-                    parsed_races.append({
-                        "Race ID": rid,
-                        "Place": place_map.get(jj, f"Jo{jj}"),
-                        "Round": f"{race_num_val:02d}R",
-                        "Type": "RA", 
-                        "Raw": r['content'][:50] + "..."
-                    })
-                    
+                if rtype == 'RA' or 'race_id' in content_json:
+                    if rid not in seen_races:
+                        jj = rid[8:10]
+                        race_num_val = int(rid[12:14])
+                        
+                        race_info = {
+                            "Race ID": rid,
+                            "Place": place_map.get(jj, f"Jo{jj}"),
+                            "Round": f"{race_num_val:02d}R",
+                            "Type": "0B15"
+                        }
+                        # Add Result Info if exists
+                        if rid in results_map:
+                            race_info["Winner"] = results_map[rid].get("rank_1_horse", "--")
+                            race_info["Payout"] = results_map[rid].get("pay_tan", 0)
+                            
+                        parsed_races.append(race_info)
+                        seen_races.add(rid)
+                        
                 # --- SE: Horse Data ---
-                elif rtype == 'SE':
+                if 'horse_num' in content_json or rtype == 'SE':
                     if rid not in parsed_horses:
                         parsed_horses[rid] = {}
                     
-                    # Flatten the JSON content
                     horse_data = content_json.copy()
                     horse_data['Race ID'] = rid
                     
-                    # Use Umaban as unique key (default to index if missing)
-                    # "Umaban" is key from fix_0b15_se.py
-                    umaban = horse_data.get('Umaban', f"idx_{len(parsed_horses[rid])}")
+                    # Align keys for display
+                    umaban = str(horse_data.get('horse_num', horse_data.get('Umaban', '')))
+                    horse_data['Umaban'] = umaban
+                    horse_data['Horse'] = horse_data.get('horse_name', horse_data.get('Horse', ''))
+                    horse_data['Jockey'] = horse_data.get('jockey', horse_data.get('Jockey', ''))
                     
-                    parsed_horses[rid][umaban] = horse_data
+                    # Add Odds Info if exists
+                    if rid in odds_map:
+                        odds_list = odds_map[rid].get("odds", [])
+                        for o in odds_list:
+                            if str(o.get("horse_num")) == umaban:
+                                horse_data["Odds"] = o.get("tan_odds", "--")
+                                break
                     
+                    if umaban:
+                        parsed_horses[rid][umaban] = horse_data
+                        
             except:
+                import traceback
+                st.code(traceback.format_exc())
                 continue
         
         # Convert parsed_horses dict-of-dicts to dict-of-lists
@@ -150,6 +180,8 @@ def fetch_todays_data(date_str):
         return parsed_races, final_horses
     except Exception as e:
         st.error(f"Data Fetch Error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return [], {}
 
 # --- 2. Components ---
