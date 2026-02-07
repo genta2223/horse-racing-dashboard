@@ -24,29 +24,47 @@ if res.data:
         raw_b64 = r['raw_string']
         
         try:
-            # Decode
+            # Decode Base64 to Raw Bytes
             raw_bytes = base64.b64decode(raw_b64)
+            # Decode to UTF-8 (as preserved by step1)
             line = raw_bytes.decode('utf-8', errors='replace')
             
             # Identify Type
             if line.startswith("SE"):
-                # Parse SE
-                # Adjusted Offsets (based on user feedback -6 chars from previous)
+                # Parse SE using Shift-JIS Bytes (Robust Method)
+                try:
+                    # Re-encode to Shift-JIS to restore fixed byte positions
+                    sj_bytes = line.encode('shift_jis')
+                except:
+                    # Fallback if encoding fails
+                    continue
+
+                # Standard JRA-VAN SE Record Offsets (Bytes)
+                # Waku: 27:28
+                # Umaban: 28:30
+                # Horse: 40:76 (36 bytes)
+                # Trainer: 92:100 (8 bytes)
+                # Weight: 128:131 (3 bytes)
+                # Jockey: 138:146 (8 bytes)
                 
-                # Waku: 27 (1 char)
-                # Umaban: 28:30 (2 chars)
-                # RegNum: 30:40 (10 chars)
-                # Horse: 40:58 (18 chars)
-                # Weight: 128:131
-                # Jockey: 144:160
+                def get_sjis_str(b_data, start, end):
+                    try:
+                        # Decode and clean
+                        return b_data[start:end].decode('shift_jis').strip().replace("\u3000", " ")
+                    except:
+                        return ""
+
+                waku = get_sjis_str(sj_bytes, 27, 28)
+                umaban = get_sjis_str(sj_bytes, 28, 30)
+                reg_num = get_sjis_str(sj_bytes, 30, 40)
+                horse_name = get_sjis_str(sj_bytes, 40, 76)
+                trainer_name = get_sjis_str(sj_bytes, 92, 100)
+                weight = get_sjis_str(sj_bytes, 128, 131)
+                jockey_name = get_sjis_str(sj_bytes, 138, 146)
                 
-                waku = line[27:28] if len(line) > 27 else ""
-                umaban = line[28:30].strip()
-                reg_num = line[30:40].strip()
-                horse_name = line[40:58].strip().replace("@", " ").replace(" ", "") 
-                
-                weight = line[128:131].strip()
-                jockey_name = line[144:160].strip().replace("@", " ").replace(" ", "")
+                # Weight Formatting
+                if weight.isdigit():
+                    weight = f"{int(weight)/10:.1f}"
                 
                 parsed = {
                     "record_type": "SE",
@@ -54,9 +72,11 @@ if res.data:
                     "Umaban": umaban,
                     "Horse": horse_name,
                     "Jockey": jockey_name,
-                    "Weight": f"{int(weight)/10:.1f}" if weight.isdigit() else weight,
+                    "Trainer": trainer_name,
+                    "Weight": weight,
                     "RegNum": reg_num,
-                    "RawString": line[:50]
+                    "RawString": line[:50],
+                    "Odds": "---" # 0B15 does not have Odds
                 }
                 
                 # Update DB
