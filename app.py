@@ -128,7 +128,7 @@ def fetch_todays_data(date_str):
                 if rtype == 'RA' or 'race_id' in content_json:
                     if rid not in seen_races:
                         jj = rid[8:10]
-                        race_num_val = int(rid[12:14])
+                        race_num_val = int(rid[14:16])
                         
                         race_info = {
                             "Race ID": rid,
