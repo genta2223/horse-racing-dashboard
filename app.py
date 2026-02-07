@@ -314,33 +314,120 @@ with tab_monitor:
         st.dataframe(pd.DataFrame(res_hist.data), use_container_width=True)
 
 with tab_results:
-    st.header("🏆 Race Results (Scraped / netkeiba)")
+    st.header("🏆 Results & Verification")
     
     col_res1, col_res2 = st.columns([1, 3])
     with col_res1:
         if st.button("🔄 Update Results Now"):
-            with st.spinner("Scraping results..."):
+            with st.spinner("Scraping results from netkeiba..."):
                 # Fetch today's race_ids from DB
                 today_str = datetime.datetime.now(jst).strftime("%Y%m%d")
                 res_rids = supabase.table("raw_race_data").select("race_id").eq("race_date", today_str).execute()
-                if res_rids.data:
+                
+                # Also check yesterday just in case
+                yest_str = (datetime.datetime.now(jst) - datetime.timedelta(days=1)).strftime("%Y%m%d")
+                res_rids_yest = supabase.table("raw_race_data").select("race_id").eq("race_date", yest_str).execute()
+                
+                all_rids = []
+                if res_rids.data: all_rids.extend([r['race_id'] for r in res_rids.data])
+                if res_rids_yest.data: all_rids.extend([r['race_id'] for r in res_rids_yest.data])
+                
+                # Filter unique and valid
+                all_rids = sorted(list(set([r for r in all_rids if r.startswith("20")])))
+                
+                if all_rids:
                     count = 0
                     progress_bar = st.progress(0)
-                    total = len(res_rids.data)
+                    total = len(all_rids)
                     
-                    for i, r in enumerate(res_rids.data):
-                        rid = r['race_id']
+                    for i, rid in enumerate(all_rids):
+                        # Scrape
                         data = scrape_race_results(rid)
                         if data:
                             supabase.table("race_results").upsert(data).execute()
                             count += 1
                         progress_bar.progress((i + 1) / total)
                         time.sleep(0.5)
-                    st.success(f"Updated {count} records!")
+                    st.success(f"Updated results for {count} races!")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.warning("No races found for today to scrape.")
+                    st.warning("No races found to scrape.")
+
+    st.divider()
+    
+    # Verification Table
+    # 1. Get Bets
+    res_bets = supabase.table("bet_queue").select("*").order("created_at", desc=True).execute()
+    bets = res_bets.data if res_bets.data else []
+    
+    # 2. Get Results
+    res_results = supabase.table("race_results").select("*").execute()
+    results_map = {r['race_id']: r for r in res_results.data} if res_results.data else {}
+    
+    if bets:
+        verification_data = []
+        total_payout = 0
+        total_cost = 0
+        
+        for b in bets:
+            rid = b['race_id']
+            # Heuristic fix for ID mismatch if any (12 vs 16 digits)
+            # Try to find result with matching prefix
+            res = results_map.get(rid)
+            if not res:
+                # Try 12 digit version match if 16 digit is stored or vice versa
+                # This is a bit hacky but helps with JRA/Netkeiba ID differences
+                for k, v in results_map.items():
+                    if rid in k or k in rid:
+                        res = v
+                        break
+            
+            # Status
+            status = "⏳ Pending"
+            payout = 0
+            cost = b['amount'] if b['status'] == 'purchased' else 0
+            
+            if res:
+                # Check Hit
+                win_horse = res.get('rank_1_horse_num')
+                # Simple logic for TAN (Win)
+                if b['bet_type'] == 'tan':
+                    if win_horse and b['horse_num'] == win_horse:
+                        status = "✅ HIT"
+                        # Calculate return (Tan Payout is usually per 100 yen)
+                        unit_payout = res.get('pay_tan', 0)
+                        payout = (b['amount'] / 100) * unit_payout
+                    else:
+                        status = "❌ MISS"
+                else:
+                    status = "❓ Unknown Type"
+            
+            if b['status'] == 'purchased':
+                total_cost += cost
+                total_payout += payout
+            
+            verification_data.append({
+                "Date": b['race_id'][:8],
+                "Race": rid,
+                "Horse": b['horse_num'],
+                "Type": b['bet_type'],
+                "Status": b['status'],
+                "Result": status,
+                "Cost": cost,
+                "Return": payout
+            })
+            
+        st.subheader("📊 Verification Report")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Bets (Purchased)", f"¥{total_cost:,}")
+        col2.metric("Total Return", f"¥{int(total_payout):,}")
+        net = int(total_payout - total_cost)
+        col3.metric("Net Profit", f"¥{net:,}", delta=net)
+        
+        st.dataframe(pd.DataFrame(verification_data))
+    else:
+        st.info("No bets found to verify.")
     
     # Show entries from race_results table
     try:
