@@ -443,10 +443,6 @@ with tab_results:
         else:
             st.info("No scraped results yet. Run 'worker_result_scraper.py'.")
             
-        # Also show raw 0B12 data for cross-reference
-        with st.expander("Raw 0B12 Data"):
-            res_0b12 = supabase.table("raw_race_data").select("*").eq("data_type", "0B12").order("timestamp", desc=True).limit(20).execute()
-            if res_0b12.data:
-                st.dataframe(pd.DataFrame(res_0b12.data))
+        # Removed Raw 0B12 Data dump as it was confusing users.
     except Exception as e:
         st.error(f"Error: {e}")
