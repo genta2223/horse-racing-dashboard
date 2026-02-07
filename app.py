@@ -81,6 +81,46 @@ def debug_container(component_id, title, func, *args, **kwargs):
 
 # --- 2. Components ---
 
+# --- 1.5 Data Fetching & Processing ---
+@st.cache_data(ttl=60)
+def fetch_todays_data(date_str):
+    if not supabase: return []
+    try:
+        # Get 0B15 (Schedule)
+        res = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
+        races = res.data if res.data else []
+        
+        parsed_data = []
+        place_map = {
+            "01": "Sapporo", "02": "Hakodate", "03": "Fukushima", "04": "Niigata",
+            "05": "Tokyo", "06": "Nakayama", "07": "Chukyo", "08": "Kyoto", 
+            "09": "Hanshin", "10": "Kokura"
+        }
+
+        for r in races:
+            rid = r['race_id']
+            if not rid.startswith("20"): continue 
+            
+            # ID Format: YYYYMMDDJJRR (12 digits) or longer
+            # JJ = 8:10, RR = 10:12
+            jj = rid[8:10]
+            rr = rid[10:12]
+            
+            parsed_data.append({
+                "race_id": rid,
+                "place_code": jj,
+                "place_name": place_map.get(jj, f"Unknown({jj})"),
+                "race_num": rr,
+                "raw": r['content']
+            })
+            
+        return parsed_data
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
+        return []
+
+# --- 2. Components ---
+
 def render_header():
     """ID: 001 Header Area"""
     cols = st.columns([2, 1, 1])
@@ -93,85 +133,85 @@ def render_header():
         status_text = "Connected" if supabase else "Disconnected"
         st.markdown(f"**DB Status**: :{status_color}[{status_text}]")
 
-def render_filter():
+def render_filter(available_places):
     """ID: 003 Filter Area"""
-    st.write("📍 **Place Filter**")
-    # Horizontal Radio
-    selection = st.radio(
-        "Select Place:",
-        ["All", "Tokyo (05)", "Kyoto (08)", "Kokura (10)"],
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-    return selection
-
-def render_race_list(filter_selection):
-    """ID: 002 Race List Area"""
-    st.write(f"📋 **Race List** (Filter: `{filter_selection}`)")
+    st.write("📍 **Race Filters**")
     
-    # Fetch Data
-    date_str = now_jst.strftime("%Y%m%d")
-    if not supabase:
-        st.error("DB Not Connected")
+    # 1. Place Filter (Dynamic)
+    # create options like ["All", "Tokyo (05)", "Kyoto (08)"]
+    place_options = ["All"] + sorted(list(set([f"{p['place_name']} ({p['place_code']})" for p in available_places])))
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        sel_place = st.radio("Place:", place_options, horizontal=True)
+    
+    with c2:
+        # 2. Race Number Filter
+        # 1-12
+        r_nums = ["All"] + [f"{i:02d}" for i in range(1, 13)]
+        sel_num = st.radio("Race Num:", r_nums, horizontal=True)
+        
+    return {"place": sel_place, "race_num": sel_num}
+
+def render_race_list(data, filters):
+    """ID: 002 Race List Area"""
+    sel_place = filters['place']
+    sel_num = filters['race_num']
+    
+    st.write(f"📋 **Race List** (Filter: `{sel_place}` / `{sel_num}`R)")
+    
+    if not data:
+        st.info("No race data found for today.")
         return
 
-    try:
-        # Get 0B15 (Schedule/Race Info)
-        res = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
-        races = res.data if res.data else []
+    # Apply Filters
+    filtered = []
+    for r in data:
+        # Place Filter
+        if sel_place != "All":
+            # sel_place format: "Name (Code)" e.g. "Tokyo (05)"
+            # Check if code maps
+            code_in_opt = sel_place.split("(")[-1].replace(")", "")
+            if r['place_code'] != code_in_opt: continue
+            
+        # Num Filter
+        if sel_num != "All":
+            if r['race_num'] != sel_num: continue
+            
+        filtered.append(r)
+    
+    if filtered:
+        # Display as clean dataframe
+        display_data = [{
+            "Time": "Unknown", # Needs parsing from content if possible, or just ID
+            "Place": d['place_name'],
+            "Race": f"{d['race_num']}R",
+            "ID": d['race_id'],
+        } for d in filtered]
         
-        if not races:
-            st.warning(f"No 0B15 data found for {date_str}.")
-            return
-            
-        # Process Data
-        valid_races = []
-        for r in races:
-            rid = r['race_id']
-            if not rid.startswith("20"): continue # Skip garbage
-            
-            # Simple Place Parsing from ID (YYYYMMDDJJRR)
-            # JJ is 8:10
-            jj = rid[8:10]
-            
-            # Filter Logic
-            if filter_selection == "Tokyo (05)" and jj != "05": continue
-            if filter_selection == "Kyoto (08)" and jj != "08": continue
-            if filter_selection == "Kokura (10)" and jj != "10": continue
-            
-            valid_races.append({
-                "Race ID": rid,
-                "Place Code": jj,
-                "Race Num": rid[10:12] if len(rid) >= 12 else "??",
-                "Raw Content (Partial)": r['content'][:50] + "..." if r['content'] else ""
-            })
-            
-        if valid_races:
-            st.dataframe(valid_races, use_container_width=True)
-        else:
-            st.info("No races match the filter.")
-
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.dataframe(display_data, use_container_width=True)
+    else:
+        st.warning("No races match the selected filters.")
 
 # --- 3. Main Layout ---
 
 def main():
-    # Sidebar (Just basic config for now)
     with st.sidebar:
         st.header("Debug Console")
         st.write("Mode: Visual Debugger")
     
+    # Global Data Fetch
+    date_str = now_jst.strftime("%Y%m%d")
+    todays_data = fetch_todays_data(date_str)
+    
     # Component 001: Header
     debug_container("001", "Header Area", render_header)
     
-    # Component 003: Filter
-    # Need to capture return value
-    selected_place = debug_container("003", "Filter Area", render_filter)
+    # Component 003: Filter (Pass available places for dynamic options)
+    filters = debug_container("003", "Filter Area", render_filter, todays_data)
     
-    # Component 002: Race List
-    # Pass data from 003 to 002
-    debug_container("002", "Race List Area", render_race_list, selected_place)
+    # Component 002: Race List (Pass filtered data)
+    debug_container("002", "Race List Area", render_race_list, todays_data, filters)
 
 if __name__ == "__main__":
     main()
