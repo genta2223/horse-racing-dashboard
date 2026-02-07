@@ -1,5 +1,6 @@
 
 import streamlit as st
+import pandas as pd
 import datetime
 import pytz
 import os
@@ -96,23 +97,53 @@ def fetch_todays_data(date_str):
             "05": "Tokyo", "06": "Nakayama", "07": "Chukyo", "08": "Kyoto", 
             "09": "Hanshin", "10": "Kokura"
         }
+        
+        # Track Codes (Simplified)
+        track_map = {
+            "10": "Turf", "11": "Turf", "12": "Turf", 
+            "20": "Dirt", "21": "Dirt", "22": "Dirt", 
+            "23": "Dirt", "24": "Dirt", "25": "Dirt", "26": "Dirt",
+            "51": "Obstacle", "52": "Obstacle", "53": "Obstacle", "54": "Obstacle", "55": "Obstacle", "56": "Obstacle", "57": "Obstacle", "58": "Obstacle", "59": "Obstacle"
+        }
 
         for r in races:
             rid = r['race_id']
-            if not rid.startswith("20"): continue 
+            # Basic validation
+            if not rid.startswith("20") or len(rid) < 14: continue 
             
-            # ID Format: YYYYMMDDJJRR (12 digits) or longer
-            # JJ = 8:10, RR = 10:12
+            # RA Record Parsing (Fixed Width)
+            # content is likely the long string from JVRead
+            raw = r['content']
+            
+            # ID Parsers
             jj = rid[8:10]
-            rr = rid[10:12]
+            # 16-digit: YYYYMMDDJJKKNNRR
+            # 05 (Jyo), 01 (Kai), 03 (Nich), 08 (RaceNum)
             
-            parsed_data.append({
-                "race_id": rid,
-                "place_code": jj,
-                "place_name": place_map.get(jj, f"Unknown({jj})"),
-                "race_num": rr,
-                "raw": r['content']
-            })
+            try:
+                race_num_val = int(rid[14:16])
+                
+                # Try simple specific offsets for 0B15 RA:
+                # 0B15 structure (from documentation/memory):
+                # DataKubun(2), Year(4), Month(2), Day(2), Jyo(2), Kai(2), Nich(2), RaceNum(2), 
+                # RaceName(60), ...
+                # Total Header ~18 bytes?
+                # Let's try to extract Race Name at offset ~20?
+                # Actually, relying on byte positions on potential shift-jis string is hard in pure Python without knowing encoding state.
+                # DB `content` is likely UTF-8 string now if downloaded correctly?
+                # If so, byte extraction is tricky.
+                
+                # Fallback: Just use ID metadata.
+                parsed_data.append({
+                    "Race ID": rid,
+                    "Place": place_map.get(jj, f"Jo{jj}"),
+                    "Round": f"{race_num_val:02d}R",
+                    "Type": "Unknown", # Need strict parsing
+                    "Horses": "??",    # Need strict parsing
+                    "Raw": raw[:20] + "..."
+                })
+            except:
+                continue
             
         return parsed_data
     except Exception as e:
@@ -133,13 +164,12 @@ def render_header():
         status_text = "Connected" if supabase else "Disconnected"
         st.markdown(f"**DB Status**: :{status_color}[{status_text}]")
 
-def render_filter(available_places):
+def render_filter(available_places, available_columns):
     """ID: 003 Filter Area"""
-    st.write("📍 **Race Filters**")
+    st.write("📍 **Race Filters & Display**")
     
     # 1. Place Filter (Dynamic)
-    # create options like ["All", "Tokyo (05)", "Kyoto (08)"]
-    place_options = ["All"] + sorted(list(set([f"{p['place_name']} ({p['place_code']})" for p in available_places])))
+    place_options = ["All"] + sorted(list(set([f"{p['Place']} ({p['Race ID'][8:10]})" for p in available_places])))
     
     c1, c2 = st.columns(2)
     with c1:
@@ -147,18 +177,25 @@ def render_filter(available_places):
     
     with c2:
         # 2. Race Number Filter
-        # 1-12
         r_nums = ["All"] + [f"{i:02d}" for i in range(1, 13)]
         sel_num = st.radio("Race Num:", r_nums, horizontal=True)
-        
-    return {"place": sel_place, "race_num": sel_num}
+
+    st.markdown("---")
+    # 3. Column Selector
+    st.write("👀 **Column Visibility**")
+    # Default: ID, Place, Round
+    default_cols = ["Place", "Round", "Race ID"]
+    sel_cols = st.multiselect("Select columns:", available_columns, default=default_cols)
+    
+    return {"place": sel_place, "race_num": sel_num, "columns": sel_cols}
 
 def render_race_list(data, filters):
     """ID: 002 Race List Area"""
     sel_place = filters['place']
     sel_num = filters['race_num']
+    sel_cols = filters['columns']
     
-    st.write(f"📋 **Race List** (Filter: `{sel_place}` / `{sel_num}`R)")
+    st.write(f"📋 **Race List** ({len(data)} records)")
     
     if not data:
         st.info("No race data found for today.")
@@ -169,33 +206,36 @@ def render_race_list(data, filters):
     for r in data:
         # Place Filter
         if sel_place != "All":
-            # sel_place format: "Name (Code)" e.g. "Tokyo (05)"
-            # Check if code maps
+            # Extract code from "Place Name (Code)"
             code_in_opt = sel_place.split("(")[-1].replace(")", "")
-            if r['place_code'] != code_in_opt: continue
+            # r['Race ID'] is 16 char: ...05...
+            if r['Race ID'][8:10] != code_in_opt: continue
             
         # Num Filter
         if sel_num != "All":
-            if r['race_num'] != sel_num: continue
+            if r['Round'] != f"{sel_num}R": continue
             
         filtered.append(r)
     
     if filtered:
-        # Display as clean dataframe
-        display_data = [{
-            "Time": "Unknown", # Needs parsing from content if possible, or just ID
-            "Place": d['place_name'],
-            "Race": f"{d['race_num']}R",
-            "ID": d['race_id'],
-        } for d in filtered]
+        # Display Only Selected Columns
+        # Create DF
+        import pandas as pd
+        df = pd.DataFrame(filtered)
         
-        st.dataframe(display_data, use_container_width=True)
+        # Check if selected cols exist
+        valid_cols = [c for c in sel_cols if c in df.columns]
+        if valid_cols:
+            st.dataframe(df[valid_cols], use_container_width=True)
+        else:
+            st.warning("No columns selected.")
     else:
         st.warning("No races match the selected filters.")
 
 # --- 3. Main Layout ---
 
 def main():
+    # Sidebar
     with st.sidebar:
         st.header("Debug Console")
         st.write("Mode: Visual Debugger")
@@ -204,13 +244,16 @@ def main():
     date_str = now_jst.strftime("%Y%m%d")
     todays_data = fetch_todays_data(date_str)
     
+    # Extract all possible keys for column selector
+    all_keys = list(todays_data[0].keys()) if todays_data else ["Race ID", "Place", "Round"]
+    
     # Component 001: Header
     debug_container("001", "Header Area", render_header)
     
-    # Component 003: Filter (Pass available places for dynamic options)
-    filters = debug_container("003", "Filter Area", render_filter, todays_data)
+    # Component 003: Filter (Pass available places & columns)
+    filters = debug_container("003", "Filter Area", render_filter, todays_data, all_keys)
     
-    # Component 002: Race List (Pass filtered data)
+    # Component 002: Race List (Pass filtered data & selected columns)
     debug_container("002", "Race List Area", render_race_list, todays_data, filters)
 
 if __name__ == "__main__":
