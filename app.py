@@ -327,6 +327,10 @@ def main():
             code = filters['place'].split("(")[-1].replace(")", "")
             filtered_races = filtered_races[filtered_races['Race ID'].str.slice(8,10) == code]
         
+        if filters.get("race_num") != "All":
+            num = filters['race_num']
+            filtered_races = filtered_races[filtered_races['Race ID'].str.slice(14,16) == num]
+        
         if not filtered_races.empty:
             st.dataframe(filtered_races, use_container_width=True, hide_index=True)
             selected_rid = st.selectbox("View details for Race ID:", filtered_races['Race ID'].tolist(), key="rid_dash")
@@ -341,7 +345,18 @@ def main():
         if df_races.empty:
             st.warning("No race data loaded.")
         else:
-            selected_rid_ai = st.selectbox("Select Race for AI Analysis:", df_races['Race ID'].tolist(), key="rid_ai")
+            # Format selectbox options to show place and race number
+            race_options = []
+            for _, row in df_races.iterrows():
+                rid = row['Race ID']
+                place = row.get('Place', rid[8:10])
+                race_num = row.get('Round', f"{int(rid[14:16])}R")
+                race_options.append(f"{place} {race_num} ({rid})")
+            
+            selected_option = st.selectbox("Select Race for AI Analysis:", race_options, key="rid_ai")
+            # Extract race_id from selection
+            selected_rid_ai = selected_option.split("(")[-1].replace(")", "")
+            
             df_curr = df_merged[df_merged['race_id'] == selected_rid_ai].copy()
             
             if df_curr['odds_tan'].isna().all():
@@ -354,15 +369,27 @@ def main():
             
             df_pred = run_ai_prediction(df_curr)
             
-            st.subheader(f"Results for {selected_rid_ai}")
+            # Extract place and race info for display
+            place_map = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟",
+                         "05": "東京", "06": "中山", "07": "中京", "08": "京都", 
+                         "09": "阪神", "10": "小倉"}
+            jj = selected_rid_ai[8:10]
+            race_num = int(selected_rid_ai[14:16])
+            place_name = place_map.get(jj, f"場{jj}")
+            
+            st.subheader(f"📍 {place_name} {race_num}R の予測結果")
             rec = df_pred[df_pred['pred_mark'] > 0].sort_values('odds_tan_val', ascending=False)
             
             if rec.empty:
                 st.info("このレースには推奨馬がいません（ルールベース条件に合致しません）。")
             else:
                 st.success(f"推奨馬が {len(rec)} 頭見つかりました！")
+                # Add place and race columns
+                rec = rec.copy()
+                rec['場所'] = place_name
+                rec['R'] = f"{race_num}R"
                 st.dataframe(
-                    rec[['horse_num', 'horse_name', 'odds_tan_val', 'pop_tan_val', 'pred_score']].rename(columns={
+                    rec[['場所', 'R', 'horse_num', 'horse_name', 'odds_tan_val', 'pop_tan_val', 'pred_score']].rename(columns={
                         'horse_num': '番', 'horse_name': '馬名', 'odds_tan_val': '単勝', 'pop_tan_val': '人気', 'pred_score': 'AIスコア'
                     }),
                     use_container_width=True,
