@@ -82,16 +82,16 @@ def debug_container(component_id, title, func, *args, **kwargs):
 
 # --- 2. Components ---
 
-# --- 1.5 Data Fetching & Processing ---
 @st.cache_data(ttl=60)
 def fetch_todays_data(date_str):
-    if not supabase: return []
+    if not supabase: return [], {}
     try:
         # Get 0B15 (Schedule)
         res = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).order("race_id").execute()
-        races = res.data if res.data else []
+        raw_rows = res.data if res.data else []
         
-        parsed_data = []
+        parsed_races = []
+        parsed_horses = {} # Key: race_id, Value: list of horse dicts
         seen_ids = set()
         
         place_map = {
@@ -100,51 +100,51 @@ def fetch_todays_data(date_str):
             "09": "Hanshin", "10": "Kokura"
         }
         
-        import json # Ensure json is imported
+        import json
 
-        for r in races:
+        for r in raw_rows:
             rid = r['race_id']
-            # Basic validation
             if not rid.startswith("20") or len(rid) < 14: continue 
             
-            # Deduplication
-            if rid in seen_ids: continue
-            
-            # Record Type Filter: Only 'RA' (Race Header)
-            # Parse Content
             try:
                 content_json = json.loads(r['content'])
-                if content_json.get('record_type') != 'RA':
-                    continue
-            except:
-                # If not JSON, maybe raw string? 
-                # If we assume 0B15 from previous steps is JSON wrapped:
-                continue
-
-            # Mark as seen
-            seen_ids.add(rid)
-
-            # ID Parsers
-            jj = rid[8:10]
-            # 16-digit: YYYYMMDDJJKKNNRR
-            
-            try:
-                race_num_val = int(rid[14:16])
+                rtype = content_json.get('record_type')
                 
-                parsed_data.append({
-                    "Race ID": rid,
-                    "Place": place_map.get(jj, f"Jo{jj}"),
-                    "Round": f"{race_num_val:02d}R",
-                    "Type": "RA", 
-                    "Raw": r['content'][:50] + "..."
-                })
+                # --- RA: Race Header ---
+                if rtype == 'RA':
+                    if rid in seen_ids: continue
+                    seen_ids.add(rid)
+
+                    jj = rid[8:10]
+                    race_num_val = int(rid[14:16])
+                    
+                    parsed_races.append({
+                        "Race ID": rid,
+                        "Place": place_map.get(jj, f"Jo{jj}"),
+                        "Round": f"{race_num_val:02d}R",
+                        "Type": "RA", 
+                        "Raw": r['content'][:50] + "..."
+                    })
+                    
+                # --- SE: Horse Data ---
+                elif rtype == 'SE':
+                    if rid not in parsed_horses:
+                        parsed_horses[rid] = []
+                    
+                    # Flatten the JSON content for "All Data" display
+                    horse_data = content_json.copy()
+                    # Add ID context
+                    horse_data['Race ID'] = rid
+                    
+                    parsed_horses[rid].append(horse_data)
+                    
             except:
                 continue
             
-        return parsed_data
+        return parsed_races, parsed_horses
     except Exception as e:
         st.error(f"Data Fetch Error: {e}")
-        return []
+        return [], {}
 
 # --- 2. Components ---
 
@@ -191,20 +191,18 @@ def render_race_list(data, filters):
     sel_num = filters['race_num']
     sel_cols = filters['columns']
     
-    st.write(f"📋 **Race List** ({len(data)} records)")
+    st.write(f"📋 **Race List** ({len(data)} potential races)")
     
     if not data:
         st.info("No race data found for today.")
-        return
+        return [] # Return empty list of filtered RIDs
 
     # Apply Filters
     filtered = []
     for r in data:
         # Place Filter
         if sel_place != "All":
-            # Extract code from "Place Name (Code)"
             code_in_opt = sel_place.split("(")[-1].replace(")", "")
-            # r['Race ID'] is 16 char: ...05...
             if r['Race ID'][8:10] != code_in_opt: continue
             
         # Num Filter
@@ -215,18 +213,40 @@ def render_race_list(data, filters):
     
     if filtered:
         # Display Only Selected Columns
-        # Create DF
-        import pandas as pd
         df = pd.DataFrame(filtered)
-        
-        # Check if selected cols exist
         valid_cols = [c for c in sel_cols if c in df.columns]
         if valid_cols:
             st.dataframe(df[valid_cols], use_container_width=True)
         else:
             st.warning("No columns selected.")
+            
+        return [r['Race ID'] for r in filtered]
     else:
         st.warning("No races match the selected filters.")
+        return []
+
+def render_horse_list(filtered_rids, horses_map):
+    """ID: 004 Horse List"""
+    st.write(f"🏇 **Horse List** (Targeting {len(filtered_rids)} Races)")
+    
+    if not filtered_rids:
+        st.info("No races selected.")
+        return
+
+    # Aggregate horses
+    all_horses = []
+    for rid in filtered_rids:
+        if rid in horses_map:
+            all_horses.extend(horses_map[rid])
+            
+    if all_horses:
+        st.write(f"Found {len(all_horses)} horses.")
+        df = pd.DataFrame(all_horses)
+        # Display all columns (as requested)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.warning("No horse (SE) data found for the selected races.")
+
 
 # --- 3. Main Layout ---
 
@@ -238,7 +258,7 @@ def main():
     
     # Global Data Fetch
     date_str = now_jst.strftime("%Y%m%d")
-    todays_data = fetch_todays_data(date_str)
+    todays_data, todays_horses = fetch_todays_data(date_str)
     
     # Extract all possible keys for column selector
     all_keys = list(todays_data[0].keys()) if todays_data else ["Race ID", "Place", "Round"]
@@ -249,8 +269,12 @@ def main():
     # Component 003: Filter (Pass available places & columns)
     filters = debug_container("003", "Filter Area", render_filter, todays_data, all_keys)
     
-    # Component 002: Race List (Pass filtered data & selected columns)
-    debug_container("002", "Race List Area", render_race_list, todays_data, filters)
+    # Component 002: Race List (Returns filtered RIDs)
+    filtered_rids = debug_container("002", "Race List Area", render_race_list, todays_data, filters)
+    
+    # Component 004: Horse List
+    if filtered_rids is not None:
+        debug_container("004", "Horse List", render_horse_list, filtered_rids, todays_horses)
 
 if __name__ == "__main__":
     main()
