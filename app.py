@@ -31,48 +31,53 @@ supabase = init_connection()
 # --- 1. Debug Container Wrapper ---
 def debug_container(component_id, title, func, *args, **kwargs):
     """
-    Wraps a component function in a visual debug container using custom CSS and HTML.
+    Wraps a component function in a visual debug container using st.container and CSS :has().
     """
-    # Custom CSS for the debug box
+    # Define the unique marker class
+    marker_cls = f"debug-marker-{component_id}"
+    
+    # CSS to style the PARENT container of the marker
     css = f"""
     <style>
-    .debug-box-{component_id} {{
+    div[data-testid="stVerticalBlock"]:has(div.{marker_cls}) {{
         border: 2px dashed #ff4b4b;
         padding: 15px;
         margin-bottom: 20px;
-        position: relative;
         border-radius: 5px;
+        position: relative;
     }}
-    .debug-id-{component_id} {{
-        position: absolute;
-        top: -10px;
-        right: 10px;
-        background-color: #ff4b4b;
-        color: white;
-        padding: 2px 8px;
-        font-size: 0.8em;
-        font-weight: bold;
-        border-radius: 3px;
-    }}
+    /* Badge styling using pseudo-element or separate div? 
+       Let's try absolute positioning a real div inside */
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
     
-    # Opening Wrapper
-    st.markdown(f'<div class="debug-box-{component_id}"><div class="debug-id-{component_id}">ID: {component_id}</div>', unsafe_allow_html=True)
-    
-    # Title (Optional)
-    if title:
-        st.caption(f"🔧 {title}")
+    with st.container():
+        # Inject marker and badge
+        st.markdown(f'''
+            <div class="{marker_cls}" style="display:none;"></div>
+            <div style="
+                position: absolute;
+                top: 0px;
+                right: 0px;
+                background-color: #ff4b4b;
+                color: white;
+                padding: 2px 8px;
+                font-size: 0.8em;
+                font-weight: bold;
+                border-bottom-left-radius: 5px;
+                z-index: 100;
+            ">ID: {component_id}</div>
+        ''', unsafe_allow_html=True)
+        
+        # Title (Optional)
+        if title:
+            st.caption(f"🔧 {title}")
 
-    # Execute the component content
-    # We pass the return value back
-    result = func(*args, **kwargs)
-    
-    # Closing Wrapper
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    return result
+        # Execute component
+        result = func(*args, **kwargs)
+        
+        return result
 
 # --- 2. Components ---
 
