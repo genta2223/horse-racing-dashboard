@@ -28,7 +28,25 @@ def scrape_race_results(race_id):
     Scrapes race result from netkeiba (Example structure)
     Note: Structure is subject to change.
     """
-    url = f"https://race.netkeiba.com/race/result.html?race_id={race_id}"
+    # Convert JRA ID (16 digits) to Netkeiba ID (12 digits) if needed
+    # JRA: YYYYMMDDJJRR (Old) or YYYYMMDDJJKKNNRR (16)
+    # Netkeiba: YYYYJJKKDDRR (12)
+    # YYYY: 0-4
+    # JJ (Jyo): 8-10
+    # KK (Kai): 10-12
+    # DD (Day): 12-14
+    # RR (Race): 14-16
+    
+    nk_race_id = race_id
+    if len(race_id) == 16:
+        yyyy = race_id[0:4]
+        jj = race_id[8:10]
+        kk = race_id[10:12]
+        dd = race_id[12:14]
+        rr = race_id[14:16]
+        nk_race_id = f"{yyyy}{jj}{kk}{dd}{rr}"
+        
+    url = f"https://race.netkeiba.com/race/result.html?race_id={nk_race_id}"
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:

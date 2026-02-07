@@ -77,3 +77,24 @@ CREATE INDEX IF NOT EXISTS idx_raw_race_data_timestamp
 -- WHERE table_name = 'raw_race_data';
 
 COMMENT ON TABLE raw_race_data IS 'JRA race data from JV-Link, uploaded by local collector';
+
+-- ============================================
+-- Supabase Table: race_results
+-- ============================================
+-- Purpose: Store scraped race results from netkeiba/JRA website
+CREATE TABLE IF NOT EXISTS race_results (
+    race_id TEXT PRIMARY KEY,
+    race_date TEXT,
+    rank_1_horse_num INTEGER,
+    rank_2_horse_num INTEGER,
+    rank_3_horse_num INTEGER,
+    pay_tan INTEGER,            -- Win Payout (yen)
+    pay_fuku JSONB,             -- Place Payouts (list)
+    pay_umaren INTEGER,         -- Quinella
+    pay_umatan INTEGER,         -- Exacta
+    pay_wide JSONB,             -- Wide Payouts (list)
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE race_results IS 'Scraped race results for verification';
+
