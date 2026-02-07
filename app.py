@@ -249,11 +249,14 @@ with tab_monitor:
             
         if res_logs.data:
             df_logs = pd.DataFrame(res_logs.data)
+            # Convert UTC to JST (UTC+9)
+            if 'timestamp' in df_logs.columns:
+                df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp']).dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
             st.dataframe(
                 df_logs[['timestamp', 'level', 'message', 'details']], 
                 use_container_width=True,
                 column_config={
-                    "timestamp": st.column_config.DatetimeColumn("Time", format="MM-DD HH:mm"),
+                    "timestamp": st.column_config.DatetimeColumn("Time (JST)", format="MM-DD HH:mm"),
                     "level": st.column_config.TextColumn("Level"), 
                     "message": st.column_config.TextColumn("Message"),
                     "details": st.column_config.TextColumn("Details"),
@@ -280,16 +283,16 @@ with tab_monitor:
         if res_history.data:
             df_hist = pd.DataFrame(res_history.data)
             
-            # Format Timestamp
+            # Format Timestamp - Convert UTC to JST (UTC+9)
             if 'created_at' in df_hist.columns:
-                df_hist['created_at'] = pd.to_datetime(df_hist['created_at'])
+                df_hist['created_at'] = pd.to_datetime(df_hist['created_at']).dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
             
             # Display Clean Table
             st.dataframe(
                 df_hist[['created_at', 'race_id', 'horse_num', 'bet_type', 'amount', 'details']],
                 use_container_width=True,
                 column_config={
-                    "created_at": st.column_config.DatetimeColumn("Time", format="MM-DD HH:mm"),
+                    "created_at": st.column_config.DatetimeColumn("Time (JST)", format="MM-DD HH:mm"),
                     "amount": st.column_config.NumberColumn("Amount", format="¥%d"),
                     "horse_num": st.column_config.TextColumn("Horse"),
                     "details": st.column_config.TextColumn("Strategy Info"),
