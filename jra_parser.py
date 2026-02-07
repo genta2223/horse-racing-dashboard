@@ -1,9 +1,12 @@
 from jra_specs import SPECS
 
 class JRAParser:
-    def __init__(self, data: bytes):
-        # Save raw bytes directly to preserve fixed-length offsets
-        self.data = data
+    def __init__(self, data):
+        # データの型に応じてバイト型に統一
+        if isinstance(data, str):
+            self.data = data.encode('cp932', errors='replace')
+        else:
+            self.data = data
 
     def get_str(self, start, length):
         """指定バイト位置を切り出し、cp932でデコードして空白除去"""

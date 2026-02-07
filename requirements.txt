@@ -9,3 +9,5 @@ selenium
 webdriver-manager
 requests
 beautifulsoup4
+joblib
+scikit-learn

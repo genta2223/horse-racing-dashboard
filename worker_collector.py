@@ -26,6 +26,7 @@ import argparse
 import urllib.request
 import urllib.error
 from dotenv import load_dotenv
+from jra_parser import JRAParser
 
 # Load environment
 load_dotenv()
@@ -68,57 +69,24 @@ class DataUploader:
             print("Make sure JV-Link SDK is installed and registered.")
             sys.exit(1)
     
-    def parse_race_id(self, raw_data: str, dataspec: str) -> str:
-        """Extract race_id from JV-Link record"""
-        # JV-Link format: First 2 chars = record type, then data
-        # Common structure for 0B15/0B31: YYYYMMDD + JyoCD(2) + Kai(2) + Nichiji(2) + RaceNum(2)
-        # Position varies by spec, but typically starts around char 2-3
+    def parse_race_id(self, raw_data: str) -> str:
+        """Extract race_id from raw string using JRAParser (Byte aligned)"""
         try:
-            if len(raw_data) < 20:
-                return None
-            # Skip record type (2 chars), extract date and race info
-            # Format: YYYYMMDDJJKKNNRR (Year/Month/Day/Jyo/Kai/Nichi/Race)
-            # Only extract ASCII characters (digits)
-            race_id_raw = raw_data[2:18]
-            # Filter to ASCII only
-            return ''.join(c for c in race_id_raw if ord(c) < 128)
+            parser = JRAParser(raw_data)
+            return parser.parse("0B15").get("race_id") # Any spec works for ID position
         except:
             return None
     
     def parse_odds_data(self, raw_data: str, dataspec: str) -> dict:
-        """Parse JV-Link odds record to structured data"""
-        # Only store ASCII-safe data to avoid encoding issues
-        # Convert raw_data to ASCII representation
+        """Parse JV-Link record using robust JRAParser"""
         try:
-            raw_ascii = raw_data.encode('ascii', errors='replace').decode('ascii')[:500]
-        except:
-            raw_ascii = "[encoding error]"
-        
-        result = {
-            "raw": raw_ascii,  # ASCII-safe excerpt
-            "parsed": {}
-        }
-        
-        try:
-            if dataspec == "0B31":  # Tanpuku Odds
-                # 0B31 format: Each horse has odds at fixed positions
-                # Simplified: extract key fields
-                horses = []
-                # Actual parsing would follow JV-Link specification document
-                # For now, store raw for later parsing
-                result["type"] = "tanpuku_odds"
-                
-            elif dataspec == "0B32":  # Umaren/Umatan Odds
-                result["type"] = "umaren_odds"
-                
-            elif dataspec == "0B15":  # Race Card (Syussouba)
-                result["type"] = "race_card"
-                # Extract horse count, names, etc.
-                
+            parser = JRAParser(raw_data)
+            parsed = parser.parse(dataspec)
+            if parsed:
+                return parsed
+            return {"raw": raw_data[:100], "parse_error": "JRAParser returned None"}
         except Exception as e:
-            result["parse_error"] = str(e)
-        
-        return result
+            return {"raw": raw_data[:100], "parse_error": str(e)}
     
     def fetch_and_upload(self, dataspec: str, target_date: datetime.date):
         """Fetch data from JV-Link and upload to Supabase"""
@@ -190,10 +158,10 @@ class DataUploader:
                 if ret_code > 0 and raw_data:
                     count += 1
                     
-                    # Parse race_id
-                    race_id = self.parse_race_id(raw_data, dataspec)
-                    if not race_id:
-                        race_id = f"{dataspec}_{date_str}_{count:04d}"
+                    # Parse ID
+                    safe_race_id = self.parse_race_id(raw_data)
+                    if not safe_race_id:
+                        continue
                     
                     # Parse odds/card data
                     parsed_data = self.parse_odds_data(raw_data, dataspec)
@@ -210,8 +178,6 @@ class DataUploader:
                     except Exception as enc_err:
                         safe_raw = f"[encoding error: {enc_err}]"
                     
-                    # Force ASCII-safe race_id
-                    safe_race_id = ''.join(c for c in str(race_id) if ord(c) < 128)
                     if not safe_race_id:
                         safe_race_id = f"UNKNOWN_{count:06d}"
                     
@@ -220,7 +186,7 @@ class DataUploader:
                         "race_id": safe_race_id,
                         "data_type": dataspec,
                         "race_date": date_str,
-                        "content": json.dumps(parsed_data, ensure_ascii=True),
+                        "content": json.dumps(parsed_data, ensure_ascii=False),
                         "raw_string": safe_raw,  # Base64 encoded
                     }
                     
