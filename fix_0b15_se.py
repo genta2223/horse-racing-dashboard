@@ -36,14 +36,14 @@ if res.data:
                 # Waku: 27 (1 char)
                 # Umaban: 28:30 (2 chars)
                 # RegNum: 30:40 (10 chars)
-                # Horse: 40:76 (36 chars)
-                # Weight: 128:131? (Previous 134-6=128)
-                # Jockey: 144? (Previous 150-6=144)
+                # Horse: 40:58 (18 chars)
+                # Weight: 128:131
+                # Jockey: 144:160
                 
                 waku = line[27:28] if len(line) > 27 else ""
                 umaban = line[28:30].strip()
                 reg_num = line[30:40].strip()
-                horse_name = line[40:76].strip().replace("@", " ").replace(" ", "") 
+                horse_name = line[40:58].strip().replace("@", " ").replace(" ", "") 
                 
                 weight = line[128:131].strip()
                 jockey_name = line[144:160].strip().replace("@", " ").replace(" ", "")

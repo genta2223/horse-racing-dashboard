@@ -129,19 +129,25 @@ def fetch_todays_data(date_str):
                 # --- SE: Horse Data ---
                 elif rtype == 'SE':
                     if rid not in parsed_horses:
-                        parsed_horses[rid] = []
+                        parsed_horses[rid] = {}
                     
-                    # Flatten the JSON content for "All Data" display
+                    # Flatten the JSON content
                     horse_data = content_json.copy()
-                    # Add ID context
                     horse_data['Race ID'] = rid
                     
-                    parsed_horses[rid].append(horse_data)
+                    # Use Umaban as unique key (default to index if missing)
+                    # "Umaban" is key from fix_0b15_se.py
+                    umaban = horse_data.get('Umaban', f"idx_{len(parsed_horses[rid])}")
+                    
+                    parsed_horses[rid][umaban] = horse_data
                     
             except:
                 continue
+        
+        # Convert parsed_horses dict-of-dicts to dict-of-lists
+        final_horses = {k: sorted(list(v.values()), key=lambda x: x.get('Umaban', '99')) for k, v in parsed_horses.items()}
             
-        return parsed_races, parsed_horses
+        return parsed_races, final_horses
     except Exception as e:
         st.error(f"Data Fetch Error: {e}")
         return [], {}
