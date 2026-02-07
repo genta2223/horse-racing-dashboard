@@ -265,6 +265,7 @@ with tab_live:
                     })
         else:
             st.warning("No Data.")
+    except Exception as e:
         st.error(f"Error loading data: {e}")
 
     # Results Verification (New)
