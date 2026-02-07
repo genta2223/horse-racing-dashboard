@@ -92,55 +92,51 @@ def fetch_todays_data(date_str):
         races = res.data if res.data else []
         
         parsed_data = []
+        seen_ids = set()
+        
         place_map = {
             "01": "Sapporo", "02": "Hakodate", "03": "Fukushima", "04": "Niigata",
             "05": "Tokyo", "06": "Nakayama", "07": "Chukyo", "08": "Kyoto", 
             "09": "Hanshin", "10": "Kokura"
         }
         
-        # Track Codes (Simplified)
-        track_map = {
-            "10": "Turf", "11": "Turf", "12": "Turf", 
-            "20": "Dirt", "21": "Dirt", "22": "Dirt", 
-            "23": "Dirt", "24": "Dirt", "25": "Dirt", "26": "Dirt",
-            "51": "Obstacle", "52": "Obstacle", "53": "Obstacle", "54": "Obstacle", "55": "Obstacle", "56": "Obstacle", "57": "Obstacle", "58": "Obstacle", "59": "Obstacle"
-        }
+        import json # Ensure json is imported
 
         for r in races:
             rid = r['race_id']
             # Basic validation
             if not rid.startswith("20") or len(rid) < 14: continue 
             
-            # RA Record Parsing (Fixed Width)
-            # content is likely the long string from JVRead
-            raw = r['content']
+            # Deduplication
+            if rid in seen_ids: continue
             
+            # Record Type Filter: Only 'RA' (Race Header)
+            # Parse Content
+            try:
+                content_json = json.loads(r['content'])
+                if content_json.get('record_type') != 'RA':
+                    continue
+            except:
+                # If not JSON, maybe raw string? 
+                # If we assume 0B15 from previous steps is JSON wrapped:
+                continue
+
+            # Mark as seen
+            seen_ids.add(rid)
+
             # ID Parsers
             jj = rid[8:10]
             # 16-digit: YYYYMMDDJJKKNNRR
-            # 05 (Jyo), 01 (Kai), 03 (Nich), 08 (RaceNum)
             
             try:
                 race_num_val = int(rid[14:16])
                 
-                # Try simple specific offsets for 0B15 RA:
-                # 0B15 structure (from documentation/memory):
-                # DataKubun(2), Year(4), Month(2), Day(2), Jyo(2), Kai(2), Nich(2), RaceNum(2), 
-                # RaceName(60), ...
-                # Total Header ~18 bytes?
-                # Let's try to extract Race Name at offset ~20?
-                # Actually, relying on byte positions on potential shift-jis string is hard in pure Python without knowing encoding state.
-                # DB `content` is likely UTF-8 string now if downloaded correctly?
-                # If so, byte extraction is tricky.
-                
-                # Fallback: Just use ID metadata.
                 parsed_data.append({
                     "Race ID": rid,
                     "Place": place_map.get(jj, f"Jo{jj}"),
                     "Round": f"{race_num_val:02d}R",
-                    "Type": "Unknown", # Need strict parsing
-                    "Horses": "??",    # Need strict parsing
-                    "Raw": raw[:20] + "..."
+                    "Type": "RA", 
+                    "Raw": r['content'][:50] + "..."
                 })
             except:
                 continue
