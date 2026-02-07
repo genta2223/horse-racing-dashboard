@@ -3,6 +3,7 @@ pandas
 plotly
 numpy
 python-dotenv
+schedule
 supabase
 selenium
 webdriver-manager
