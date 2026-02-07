@@ -250,8 +250,8 @@ Recovery Advice:
                 print(f"[SAFETY] Daily Cap Reached (¥{self.total_spent:,} / ¥{limit:,}). Stopping.")
                 return False
 
-            # Fetch Approved Bets
-            res = self.supabase.table("bet_queue").select("*").eq("status", "approved").execute()
+            # Fetch Approved Bets (Hybrid Architecture: Status=pending AND Approved=True)
+            res = self.supabase.table("bet_queue").select("*").eq("status", "pending").eq("approved", True).execute()
             bets = res.data if hasattr(res, 'data') else []
             
             if not bets:
@@ -273,12 +273,8 @@ Recovery Advice:
                     print("[SAFETY] Bet exceeds cap. Skipping.")
                     continue
 
-                # FIX #7: Only ask for input if running locally with TTY
-                if SEMI_AUTO_MODE and sys.stdin.isatty():
-                    text = input(f"Permission to buy ¥{bet['amount']}? (y/n): ")
-                    if text.lower() != 'y':
-                        print("Skipped by operator.")
-                        continue
+                # Cloud Environment: Proceed without local input
+                # The 'approved' flag in DB serves as user confirmation
                 
                 print("Buying... (Development Mode: Not clicking final button yet)")
                 # TODO: Actual purchase logic

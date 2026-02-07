@@ -5,6 +5,8 @@ import os
 import time
 import threading
 import sys
+import json
+import pytz
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -13,28 +15,63 @@ try:
     from cloud_manager import CloudManager
     from worker_shopper import Shopper
     from worker_predictor_v4_1 import run_prediction_cycle
+    from worker_result_scraper import scrape_race_results # Hybrid Scraper
 except ImportError as e:
     st.error(f"Module Import Error: {e}")
     st.stop()
 
+# ... (Config section unchanged) ...
+
+# ... (Inside tab_results) ...
+
+with tab_results:
+    st.header("🏆 Race Results (Scraped / netkeiba)")
+    
+    col_res1, col_res2 = st.columns([1, 3])
+    with col_res1:
+        if st.button("🔄 Update Results Now"):
+            with st.spinner("Scraping results..."):
+                # Fetch today's race_ids from DB
+                today_str = datetime.datetime.now(jst).strftime("%Y%m%d")
+                res_rids = supabase.table("raw_race_data").select("race_id").eq("race_date", today_str).execute()
+                if res_rids.data:
+                    count = 0
+                    progress_bar = st.progress(0)
+                    total = len(res_rids.data)
+                    
+                    for i, r in enumerate(res_rids.data):
+                        rid = r['race_id']
+                        data = scrape_race_results(rid)
+                        if data:
+                            supabase.table("race_results").upsert(data).execute()
+                            count += 1
+                        progress_bar.progress((i + 1) / total)
+                        time.sleep(0.5)
+                    st.success(f"Updated {count} records!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning("No races found for today to scrape.")
+
+    # Show entries from race_results table
+    try:
+        res_r = supabase.table("race_results").select("*").order("timestamp", desc=True).limit(20).execute()
+
+
 # --- Config ---
-st.set_page_config(page_title="Hybrid EV 2.0 Dashboard", layout="wide", page_icon="🏇")
+st.set_page_config(page_title="Hybrid EV 2.0 Commander", layout="wide", page_icon="🏇")
 load_dotenv()
 
 # --- Database Connection ---
-def find_credentials() -> tuple[str | None, str | None]:  # FIX #11: Type hints
+def find_credentials() -> tuple[str | None, str | None]:
     """Find Supabase credentials from secrets or environment"""
     url, key = None, None
     try:
-        if "SUPABASE_URL" in st.secrets:
-            url = st.secrets["SUPABASE_URL"]
-        if "SUPABASE_KEY" in st.secrets:
-            key = st.secrets["SUPABASE_KEY"]
-            
-        if not url and "supabase" in st.secrets:
-            section = st.secrets["supabase"]
-            url = section.get("url") or section.get("URL") or section.get("SUPABASE_URL")
-            key = section.get("key") or section.get("KEY") or section.get("SUPABASE_KEY")
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
+        if not url:
+            url = st.secrets["supabase"]["url"]
+            key = st.secrets["supabase"]["key"]
     except:
         pass
 
@@ -46,9 +83,7 @@ SUPABASE_URL, SUPABASE_KEY = find_credentials()
 
 @st.cache_resource
 def init_connection():
-    """Initialize Supabase connection"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
+    if not SUPABASE_URL or not SUPABASE_KEY: return None
     try:
         return create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e:
@@ -60,13 +95,9 @@ if not supabase:
     st.error("🚨 Supabase Connection Failed. Check Secrets.")
     st.stop()
 
-# --- Background Worker Manager ---
+# --- Background Worker (Maintains Shopper State) ---
 @st.cache_resource
 def init_background_worker():
-    """
-    FIX #3: Return shared instances to prevent duplication
-    Initialize background worker thread with shared CloudManager and Shopper instances
-    """
     cm = CloudManager(supabase)
     shopper = Shopper(supabase)
     
@@ -74,346 +105,227 @@ def init_background_worker():
         print("[BG] Worker Thread Started.")
         while True:
             try:
-                # Check if auto-bet is active
-                is_active = cm.is_auto_bet_active()
+                # Hybrid Mode: Only run Shopper (Shopping logic handles approval check)
+                # Prediction is manual or scheduled?
+                # User config: Check if auto-bet is active (Global Switch)
+                if cm.is_auto_bet_active():
+                    # Run Prediction Cycle periodically? 
+                    # For now just run shopper check
+                    shopper.check_and_buy(daily_limit_override=cm.get_daily_cap())
                 
-                if is_active:
-                    print("[BG] Auto Bet Active. Running cycle...")
-                    
-                    # A. Run Prediction (with error handling)
-                    try:
-                        run_prediction_cycle()
-                    except Exception as e:
-                        print(f"[BG] Prediction Error: {e}")
-                        cm.log_system_event("ERROR", "Prediction Failed", str(e))
-                    
-                    # B. Run Shopper (with enhanced error handling)
-                    current_cap = cm.get_daily_cap()
-                    try:
-                        shopper.check_and_buy(daily_limit_override=current_cap)
-                    except Exception as e:
-                        print(f"[BG] Shopper Critical Error: {e}")
-                        cm.log_system_event("CRITICAL", "Shopper Crashed", str(e))
-                        # FIX #6: Wrap alert sending to prevent cascading failures
-                        try:
-                            shopper.send_error_alert(e, context="Shopper Loop")
-                        except Exception as alert_error:
-                            print(f"[BG] Alert sending failed: {alert_error}")
-                            cm.log_system_event("CRITICAL", "Alert System Failed", str(alert_error))
-                else:
-                    print("[BG] Auto Bet INACTIVE. Sleeping...")
-                
-                time.sleep(60)  # 1 min interval
-                
+                time.sleep(60) 
             except Exception as e:
-                print(f"[BG] Global Loop Error: {e}")
-                try:
-                    cm.log_system_event("CRITICAL", "Global Loop Crashed", str(e))
-                except:
-                    print("[BG] Even logging failed. System in critical state.")
+                print(f"[BG] Loop Error: {e}")
                 time.sleep(60)
 
     t = threading.Thread(target=background_loop, daemon=True)
     t.start()
-    
-    # FIX #3: Return all shared resources
-    return {
-        "thread": t,
-        "cloud_manager": cm,
-        "shopper": shopper
-    }
+    return {"thread": t, "cloud_manager": cm, "shopper": shopper}
 
-# Initialize Worker and get shared instances
 worker_resources = init_background_worker()
-cm = worker_resources["cloud_manager"]  # FIX #3: Use shared instance
+cm = worker_resources["cloud_manager"]
 
-# --- Sidebar: Fund Management (V4.1 Hybrid) ---
-st.sidebar.title("🏇 V4.1 Hybrid Strategy")
+# --- Sidebar: Status & Config ---
+st.sidebar.title("🏇 Commander's View")
 
-# User Request: Selectable Unit Price
-unit_price = st.sidebar.selectbox("Base Unit Price (¥)", [100, 1000, 10000], index=0, help="初期投資ユニット額")
-scale_factor = unit_price / 100
+# Time
+jst = pytz.timezone('Asia/Tokyo')
+now_jst = datetime.datetime.now(jst)
+st.sidebar.caption(f"Time (JST): {now_jst.strftime('%Y-%m-%d %H:%M')}")
 
-st.sidebar.info(
-    f"""
-    **Current Strategy**
-    - **Single**: EV > 2.0 (Spear)
-    - **Wide**: EV > 1.34 (Shield)
-    - **Unit**: ¥{unit_price:,} (+Slide)
-    """
-)
+# Data Status Check
+st.sidebar.markdown("### 📡 Data Status")
 
-# --- JRA Account & Admin Panel ---
+# Check JV Data (0B15) for today/tomorrow
+today_str = now_jst.strftime("%Y%m%d")
+tomorrow_str = (now_jst + datetime.timedelta(days=1)).strftime("%Y%m%d")
+
+@st.cache_data(ttl=60)
+def check_data_status(date_str):
+    try:
+        res = supabase.table("raw_race_data").select("count", count="exact").eq("data_type", "0B15").eq("race_date", date_str).execute()
+        return res.count if res.count else 0
+    except:
+        return 0
+
+count_today = check_data_status(today_str)
+count_tomorrow = check_data_status(tomorrow_str)
+
+st.sidebar.metric("Today's Data (0B15)", f"{count_today} records", delta="OK" if count_today > 0 else "MISSING", delta_color="normal" if count_today > 0 else "inverse")
+st.sidebar.metric("Tomorrow's Data", f"{count_tomorrow} records", delta="OK" if count_tomorrow > 0 else "WAITING")
+
+if count_today == 0 and count_tomorrow == 0:
+    st.sidebar.error("⚠️ No race data found! Please upload via local script.")
+
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🏦 JRA Account & Control")
+st.sidebar.markdown("### 🏦 Controls")
 
-# Admin Auth
-admin_pass_input = st.sidebar.text_input("Admin Password", type="password")
-ADMIN_PASS_CORRECT = cm.check_admin_pass(admin_pass_input)
+# Admin
+admin_pass = st.sidebar.text_input("Admin Password", type="password")
+is_admin = cm.check_admin_pass(admin_pass)
 
-# Status Display
 is_active = cm.is_auto_bet_active()
-status_icon = "🟢" if is_active else "🔴"
-st.sidebar.metric("System Status", "ACTIVE" if is_active else "INACTIVE", delta=status_icon)
-
-if ADMIN_PASS_CORRECT:
-    st.sidebar.success("Unlocked")
-    
-    # Toggle
-    new_active = st.sidebar.toggle("Enable Auto Bet", value=is_active)
+status_label = "🟢 SYSTEM ONLINE" if is_active else "🔴 SYSTEM OFFLINE"
+if is_admin:
+    new_active = st.sidebar.toggle("Master Switch", value=is_active)
     if new_active != is_active:
         cm.set_auto_bet_active(new_active)
         st.rerun()
-    
-    # Cap Setting
-    current_cap = cm.get_daily_cap()
-    new_cap = st.sidebar.number_input("Daily Limit (¥)", value=current_cap, step=10000)
-    if new_cap != current_cap:
-        cm.set_daily_cap(int(new_cap))
-        st.sidebar.caption("Limit updated.")
 else:
-    if admin_pass_input:
-        st.sidebar.error("Invalid Password")
-    else:
-        st.sidebar.caption("🔒 Enter Password to Change Settings")
+    st.sidebar.info(status_label)
 
-# --- Main Page Tabs ---
-tab_live, tab_monitor = st.tabs(["📊 Live Dashboard", "🔍 Live Action Monitor"])
+# --- Main Interface ---
+tab_commander, tab_monitor, tab_results = st.tabs(["🎖️ Commander's Console", "🔍 Live Monitor", "🏆 Race Results"])
 
-with tab_live:
-    # Critical Alert System
-    alert_active = False 
-    if alert_active:
-        st.error("🚨 CRITICAL: DATA MISMATCH - TRADING HALTED 🚨")
-        st.stop()
-
-    # Key Metrics
-    st.markdown("### 📊 Live Performance (Endurance)")
-    col1, col2, col3, col4 = st.columns(4)
-
-    # Fetch Bets
-    df_bets = pd.DataFrame()
-    try:
-        res_bets = supabase.table("bet_queue").select("*").execute()
-        if res_bets.data:
-            df_bets = pd.DataFrame(res_bets.data)
-    except Exception as e:
-        st.error(f"Error fetching bets: {e}")
-
-    # Calculate Metrics
-    today_invest = 0
+with tab_commander:
+    st.header("🎯 Bet Approval Console")
     
-    if not df_bets.empty and 'created_at' in df_bets.columns:
-        df_bets['created_at'] = pd.to_datetime(df_bets['created_at'])
-        df_today = df_bets[df_bets['created_at'].dt.date == datetime.date.today()]
-        today_invest = df_today[df_today['status'] == 'purchased']['amount'].sum() if 'amount' in df_today.columns else 0
-        
-    col1.metric("Current Streak (Loses)", "0", delta_color="inverse")
-    col2.metric("Today's Invest", f"¥{today_invest:,}")
-    col3.metric("Daily Cap", f"¥{cm.get_daily_cap():,}")
-    col4.metric("Engine Status", "STANDBY" if not is_active else "RUNNING", delta_color="normal" if is_active else "off")
-
-    # Queue / EV Monitor
-    st.subheader("🎯 Bet Queue & EV Analysis")
-    if not df_bets.empty:
-        df_bets = df_bets.sort_values('created_at', ascending=False)
-        st.dataframe(
-            df_bets[['created_at', 'race_id', 'horse_num', 'bet_type', 'status', 'details', 'amount']],
-            use_container_width=True
-        )
-    else:
-        st.info("No bets in queue yet.")
-
-    # Odds Monitor
-    st.subheader("📈 Odds Monitor")
+    # Target Date
+    target_date = st.date_input("Target Date", value=now_jst.date())
+    target_date_str = target_date.strftime("%Y%m%d")
+    
+    # 1. Fetch Recommendations (Pending Bets)
     try:
-        res_raw = supabase.table("raw_race_data").select("*").order("timestamp", desc=True).limit(20).execute()
-        if res_raw.data:
-            df_raw = pd.DataFrame(res_raw.data)
-            # Convert timestamp to JST
-            if 'timestamp' in df_raw.columns:
-                df_raw['timestamp'] = pd.to_datetime(df_raw['timestamp'])
-                if df_raw['timestamp'].dt.tz is None:
-                    df_raw['timestamp'] = df_raw['timestamp'].dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
-                else:
-                    df_raw['timestamp'] = df_raw['timestamp'].dt.tz_convert('Asia/Tokyo')
-                df_raw['time_jst'] = df_raw['timestamp'].dt.strftime('%m-%d %H:%M')
+        # Fetch bets for this date (simple filter by race_id prefix or date field if available)
+        # raw_race_data doesn't have bet info. We query bet_queue.
+        # bet_queue needs created_at filter? Or match race_id date.
+        
+        # Heuristic: fetch all pending/approved bets
+        res = supabase.table("bet_queue").select("*").in_("status", ["pending", "approved"]).order("race_id").execute()
+        
+        all_bets = res.data if res.data else []
+        
+        # Filter by date in python (race_id usually starts with YYYYMMDD or close to it?)
+        # Current race_id format: "0B15_20260208_..." or "20260208..."
+        # Let's try to filter efficiently.
+        
+        display_bets = []
+        for b in all_bets:
+            # Check if race_id contains target date
+            if target_date_str in b['race_id']:
+                display_bets.append(b)
+        
+        if display_bets:
+            st.info(f"✨ {len(display_bets)} Recommendations for {target_date_str}")
             
-            # Display selectable table
-            st.dataframe(
-                df_raw[['time_jst', 'data_type', 'race_id', 'race_date']],
-                use_container_width=True,
+            # Prepare DataFrame for Editor
+            df_bets = pd.DataFrame(display_bets)
+            
+            # Add 'Approve' column based on 'approved' status
+            # If approved is None/False -> False
+            df_bets['Approve'] = df_bets['approved'].fillna(False)
+            
+            # Columns to show
+            cols = ['Approve', 'race_id', 'horse_num', 'bet_type', 'amount', 'details', 'status', 'id']
+            
+            edited_df = st.data_editor(
+                df_bets[cols],
                 column_config={
-                    "time_jst": st.column_config.TextColumn("Time (JST)"),
-                    "data_type": st.column_config.TextColumn("Type"),
-                    "race_id": st.column_config.TextColumn("Race ID"),
-                    "race_date": st.column_config.TextColumn("Date"),
-                }
+                    "Approve": st.column_config.CheckboxColumn(
+                        "Approve?",
+                        help="Check to approve this bet for purchase",
+                        default=False,
+                    ),
+                    "amount": st.column_config.NumberColumn(
+                        "Amount (¥)",
+                        format="¥%d",
+                    ),
+                    "details": st.column_config.TextColumn(
+                        "Strategy / Reason",
+                        width="medium"
+                    ),
+                },
+                disabled=["race_id", "horse_num", "bet_type", "status", "details", "id"],
+                hide_index=True,
+                key="bet_editor",
+                num_rows="fixed"
             )
             
-            # Data Details Expander
-            with st.expander("📋 View Raw Data Details"):
-                selected_race = st.selectbox("Select Race ID:", df_raw['race_id'].unique())
-                if selected_race:
-                    selected_data = df_raw[df_raw['race_id'] == selected_race].iloc[0]
-                    st.json({
-                        "race_id": selected_data.get('race_id'),
-                        "data_type": selected_data.get('data_type'),
-                        "race_date": selected_data.get('race_date'),
-                        "content": selected_data.get('content', 'N/A'),
-                        "timestamp": str(selected_data.get('timestamp')),
-                    })
-        else:
-            st.warning("No Data.")
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-
-    # Results Verification (New)
-    st.subheader("🏆 Race Results (0B12)")
-    try:
-        # Fetch 0B12 data
-        res_results = supabase.table("raw_race_data").select("*").eq("data_type", "0B12").order("timestamp", desc=True).limit(50).execute()
-        
-        if res_results.data:
-            df_results = pd.DataFrame(res_results.data)
+            # Save Changes Button
+            if st.button("💾 Setup Approvals"):
+                # Find changed rows
+                count_updated = 0
+                for index, row in edited_df.iterrows():
+                    original = df_bets.iloc[index]
+                    if row['Approve'] != original['Approve']:
+                        # Update DB
+                        # If Approve -> True, status remains pending (shopper picks it up)
+                        # but we mark approved=True
+                        try:
+                            supabase.table("bet_queue").update({
+                                "approved": bool(row['Approve']),
+                                "approved_at": datetime.datetime.now().isoformat() if row['Approve'] else None
+                            }).eq("id", row['id']).execute()
+                            count_updated += 1
+                        except Exception as e:
+                            st.error(f"Update failed for {row['id']}: {e}")
+                
+                if count_updated > 0:
+                    st.success(f"Updated {count_updated} bets!")
+                    time.sleep(1)
+                    st.rerun()
             
-            # Parsing Helper
-            def parse_se_simple(line):
-                try:
-                    # Simple extraction based on fixed width (Heuristic)
-                    # SE record structure (approx):
-                    # HorseName: usually around col 34-52 ? (Shift-JIS byte based, but line is unicode here?)
-                    # If unicode, width varies. 
-                    # Use simple space split or look for Japanese text
-                    import re
-                    # Extract text parts (Horse Name)
-                    # Regex for Katakana name (approx)
-                    match = re.search(r'[ァ-ンー]{2,9}', line)
-                    name = match.group(0) if match else "Unknown"
-                    return name, line
-                except:
-                    return "Error", line
-
-            race_ids = df_results['race_id'].unique()
-            selected_result_race = st.selectbox("Select Race for Results:", race_ids)
-            
-            if selected_result_race:
-                race_data = df_results[df_results['race_id'] == selected_result_race]
-                
-                st.write(f"Results for {selected_result_race}")
-                
-                # Expand JSON content if needed, key is "content" -> JSON -> "record_type"
-                # But actual line data is raw?
-                # In upload_file: content = json({"record_type":...}), raw_string = b64
-                # Wait, step2_upload uploads raw_string as Base64. 
-                # We need to decode raw_string to see the line!
-                
-                import base64
-                
-                result_lines = []
-                for idx, row in race_data.iterrows():
-                    try:
-                        # raw_string is B64 encoded bytes of the line
-                        raw_b64 = row.get('raw_string')
-                        if raw_b64:
-                            raw_bytes = base64.b64decode(raw_b64)
-                            # decode as utf-8 (uploaded as utf-8 bytes from file line)
-                            line_str = raw_bytes.decode('utf-8', errors='replace')
-                            
-                            # Filter for SE records
-                            if line_str.startswith("SE"):
-                                result_lines.append(line_str)
-                    except Exception as ex:
-                        pass
-                
-                if result_lines:
-                    # Display as simple text for now
-                    st.text_area("Raw Result Data (SE Records)", "\n".join(result_lines), height=300)
-                else:
-                    st.info("No SE (Result) records found in this batch.")
-                    
+            # Bulk Actions (Admin Only)
+            if is_admin:
+                col_bulk1, col_bulk2 = st.columns(2)
+                with col_bulk1:
+                    if st.button("✅ Approve ALL Shown"):
+                        for b in display_bets:
+                            supabase.table("bet_queue").update({
+                                "approved": True,
+                                "approved_at": datetime.datetime.now().isoformat()
+                            }).eq("id", b['id']).execute()
+                        st.success("All Approved!")
+                        st.rerun()
         else:
-            st.info("No Results (0B12) uploaded yet.")
+            st.info("No recommendations found for this date. Run Prediction or check data.")
             
     except Exception as e:
-        st.error(f"Error loading results: {e}")
+        st.error(f"Error fetching bets: {e}")
 
 with tab_monitor:
     st.header("🔍 Live Action Monitor")
     
-    # System Alerts
-    st.subheader("🚨 System Logs & Alerts")
-    try:
-        res_logs = supabase.table("system_logs")\
-            .select("*")\
-            .order("timestamp", desc=True)\
-            .limit(10)\
-            .execute()
-            
-        if res_logs.data:
-            df_logs = pd.DataFrame(res_logs.data)
-            # Convert to JST (handle both tz-aware and tz-naive timestamps)
-            if 'timestamp' in df_logs.columns:
-                df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp'])
-                # If already tz-aware, just convert; if not, localize first
-                if df_logs['timestamp'].dt.tz is None:
-                    df_logs['timestamp'] = df_logs['timestamp'].dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
-                else:
-                    df_logs['timestamp'] = df_logs['timestamp'].dt.tz_convert('Asia/Tokyo')
-            st.dataframe(
-                df_logs[['timestamp', 'level', 'message', 'details']], 
-                use_container_width=True,
-                column_config={
-                    "timestamp": st.column_config.DatetimeColumn("Time (JST)", format="MM-DD HH:mm"),
-                    "level": st.column_config.TextColumn("Level"), 
-                    "message": st.column_config.TextColumn("Message"),
-                    "details": st.column_config.TextColumn("Details"),
-                }
-            )
-        else:
-            st.caption("No system logs found.")
-    except Exception as e:
-        st.error(f"Failed to fetch logs: {e}")
+    # Refresh button
+    if st.button("🔄 Refresh Logs"):
+        st.rerun()
+
+    # System Logs
+    st.subheader("System Logs")
+    res_logs = supabase.table("system_logs").select("*").order("timestamp", desc=True).limit(10).execute()
+    if res_logs.data:
+        df_logs = pd.DataFrame(res_logs.data)
+        st.dataframe(df_logs[['timestamp', 'level', 'message', 'details']], use_container_width=True)
 
     st.divider()
-    st.markdown("### 📜 Trade History (Live Info)")
     
-    # Switch from static CSV to Supabase 'bet_queue' (purchased items)
+    # Purchase History
+    st.subheader("🛒 Purchase History")
+    res_hist = supabase.table("bet_queue").select("*").eq("status", "purchased").order("created_at", desc=True).limit(20).execute()
+    if res_hist.data:
+        st.dataframe(pd.DataFrame(res_hist.data), use_container_width=True)
+
+with tab_results:
+    st.header("🏆 Race Results (Scraped / 0B12)")
+    
+    # Show entries from race_results table
     try:
-        # Fetch last 50 purchased bets
-        res_history = supabase.table("bet_queue")\
-            .select("*")\
-            .eq("status", "purchased")\
-            .order("created_at", desc=True)\
-            .limit(50)\
-            .execute()
+        res_r = supabase.table("race_results").select("*").order("timestamp", desc=True).limit(20).execute()
+        if res_r.data:
+            df_res = pd.DataFrame(res_r.data)
+            st.dataframe(df_res, use_container_width=True)
             
-        if res_history.data:
-            df_hist = pd.DataFrame(res_history.data)
-            
-            # Format Timestamp - Convert to JST (handle tz-aware)
-            if 'created_at' in df_hist.columns:
-                df_hist['created_at'] = pd.to_datetime(df_hist['created_at'])
-                if df_hist['created_at'].dt.tz is None:
-                    df_hist['created_at'] = df_hist['created_at'].dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
-                else:
-                    df_hist['created_at'] = df_hist['created_at'].dt.tz_convert('Asia/Tokyo')
-            
-            # Display Clean Table
-            st.dataframe(
-                df_hist[['created_at', 'race_id', 'horse_num', 'bet_type', 'amount', 'details']],
-                use_container_width=True,
-                column_config={
-                    "created_at": st.column_config.DatetimeColumn("Time (JST)", format="MM-DD HH:mm"),
-                    "amount": st.column_config.NumberColumn("Amount", format="¥%d"),
-                    "horse_num": st.column_config.TextColumn("Horse"),
-                    "details": st.column_config.TextColumn("Strategy Info"),
-                }
-            )
+            # Hit Check Visualization (Simple)
+            st.subheader("🎯 Hit Check")
+            st.write("Comparing Purchase History with Results...")
+            # (Advanced hit check logic would go here)
         else:
-            st.info("ℹ️ No live trades recorded yet.")
+            st.info("No scraped results yet. Run 'worker_result_scraper.py'.")
             
+        # Also show raw 0B12 data for cross-reference
+        with st.expander("Raw 0B12 Data"):
+            res_0b12 = supabase.table("raw_race_data").select("*").eq("data_type", "0B12").order("timestamp", desc=True).limit(20).execute()
+            if res_0b12.data:
+                st.dataframe(pd.DataFrame(res_0b12.data))
     except Exception as e:
-        st.error(f"Failed to fetch trade history: {e}")
-
-
+        st.error(f"Error: {e}")
