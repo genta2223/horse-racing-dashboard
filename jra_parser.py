@@ -17,18 +17,43 @@ class JRAParser:
             return ""
 
     def parse(self, data_type):
-        """引数 data_type と Record Spec に応じて解析を行い、辞書を返す"""
+        """引数 data_type と Record Spec に応じて厳格な解析を行い、辞書を返す"""
         if data_type not in SPECS:
             return None
             
         spec_config = SPECS[data_type]
-        record_type = self.get_str(0, 2)
-        res = {"record_type": record_type}
+        record_type = self.get_str(0, 2)     # 先頭2バイト
+        data_div = self.get_str(2, 1)        # 3バイト目 (データ区分)
+        
+        # --- Strict Gatekeeper: Validation Logic ---
+        
+        # 0B15 (出馬表): SE かつ データ区分 '7' (確定) のみ許可
+        if data_type == "0B15":
+            if record_type != "SE":
+                return None # Skip non-SE records silently (e.g., RA)
+            if data_div != "7":
+                # データ区分が '7' でない場合は警告を出して弾く
+                print(f"[REJECTED] Skipped invalid data type: {record_type}{data_div} (Strictly SE7 only)")
+                return None
+
+        # 0B12 (成績): SE または HR のみ許可
+        elif data_type == "0B12":
+            if record_type not in ["SE", "HR"]:
+                return None # Skip noise (RA, H1 etc.)
+
+        # 0B30/31 (オッズ): オッズレコード以外は弾く
+        elif data_type in ["0B30", "0B31"]:
+            if not record_type.startswith("O"):
+                return None
+
+        # --- End of Validation ---
+
+        res = {"record_type": record_type, "data_division": data_div}
         
         # 1. Selector 形式 (レコード種別ごとに定義が異なる場合)
         if spec_config["type"] == "selector":
             if record_type not in spec_config["specs"]:
-                return None # 定義にないレコード(RA等)はスキップ
+                return None
             
             target_spec = spec_config["specs"][record_type]
             for col, pos in target_spec["columns"].items():
