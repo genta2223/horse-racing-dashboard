@@ -75,7 +75,7 @@ def fetch_todays_data(date_str):
     """Fetch 0B15 (SE7) and 0B30/31 (Odds) and merge using Pandas"""
     if not supabase: return pd.DataFrame(), pd.DataFrame(), {}
     try:
-        # 1. Get 0B15 (Horse Info)
+        # 1. Get 0B15 (Horse Info - SE7 from DB)
         res_h = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B15").eq("race_date", date_str).execute()
         
         # 2. Get 0B30 or 0B31 (Odds)
@@ -102,6 +102,7 @@ def fetch_todays_data(date_str):
                 if c.get('record_type') == 'SE':
                     h_row = c.copy()
                     h_row['race_id'] = rid
+                    # Standardize umaban for merge (usually 2 chars with leading zero)
                     h_row['horse_num'] = str(h_row.get('horse_num', '')).zfill(2)
                     horses_list.append(h_row)
                     
@@ -111,7 +112,8 @@ def fetch_todays_data(date_str):
                         parsed_races.append({
                             "Race ID": rid,
                             "Place": place_map.get(jj, f"Jo{jj}"),
-                            "Round": f"{int(race_num):02d}R"
+                            "Round": f"{int(race_num):02d}R",
+                            "Date": date_str
                         })
                         seen_races.add(rid)
             except: continue
@@ -124,6 +126,7 @@ def fetch_todays_data(date_str):
             rid = r['race_id']
             try:
                 c = json.loads(r['content'])
+                # odds is a list in 0B30 spec
                 for o in c.get('odds', []):
                     o_row = o.copy()
                     o_row['race_id'] = rid
@@ -135,6 +138,7 @@ def fetch_todays_data(date_str):
         
         # --- Merge Phase (Pandas) ---
         if not df_horses.empty and not df_odds.empty:
+            # Left Join on race_id and horse_num
             df_merged = pd.merge(df_horses, df_odds[['race_id', 'horse_num', 'odds_tan', 'pop_tan']], 
                                  on=['race_id', 'horse_num'], how='left')
         else:
@@ -197,7 +201,7 @@ def render_horse_list(rid, df_merged):
         st.warning(f"No horses found for Race ID: {rid}")
         return
 
-    # Map columns
+    # Map columns to localized names
     sex_map = {"1": "牡", "2": "牝", "3": "セ"}
     df_race['SexAge'] = df_race.apply(lambda r: f"{sex_map.get(str(r.get('sex_code')), '')}{r.get('age', '')}", axis=1)
     
@@ -215,6 +219,7 @@ def render_horse_list(rid, df_merged):
     display_cols = [c for c in col_map.keys() if c in df_race.columns]
     df_display = df_race[display_cols].rename(columns=col_map)
     
+    # Scale numeric odds (recorded as 10x integer often)
     if "単勝" in df_display.columns:
         df_display['単勝'] = pd.to_numeric(df_display['単勝'], errors='coerce') / 10.0
     if "人気" in df_display.columns:
@@ -225,7 +230,7 @@ def render_horse_list(rid, df_merged):
         use_container_width=True,
         hide_index=True,
         column_config={
-            "単勝": st.column_config.NumberColumn("単勝", format="%.1f"),
+            "単勝": st.column_config.NumberColumn("単勝", format="%.1f", help="Win Odds"),
             "人気": st.column_config.NumberColumn("人気", format="%d"),
             "枠": st.column_config.TextColumn("枠", width="small"),
             "番": st.column_config.TextColumn("番", width="small"),
@@ -250,13 +255,18 @@ def main():
     with st.sidebar:
         st.header("Debug Console")
         st.write("Mode: Gatekeeper Validated")
-        st.write(f"Current Time: {now_jst.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    date_str = now_jst.strftime("%Y%m%d")
+        st.write(f"Current Date: {now_jst.strftime('%Y-%m-%d')}")
+        
+    # Toggle to Tomorrow if desired (Debug helper)
+    target_date = now_jst
+    if st.sidebar.checkbox("View Tomorrow's Data (2026-02-08)", value=True):
+        target_date = datetime.datetime(2026, 2, 8, tzinfo=jst)
+        
+    date_str = target_date.strftime("%Y%m%d")
     df_races, df_merged, todays_payoffs = fetch_todays_data(date_str)
     
     if df_races.empty:
-        st.warning(f"No race data found for {date_str}.")
+        st.warning(f"No race data found for {date_str}. Please run ingestion for this date.")
         return
 
     debug_container("001", "Header Area", render_header)
