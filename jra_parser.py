@@ -1,12 +1,9 @@
 from jra_specs import SPECS
 
 class JRAParser:
-    def __init__(self, line_str):
-        # 入力データを cp932 (Shift-JIS) の bytes に変換して保持
-        try:
-            self.data = line_str.encode('cp932')
-        except UnicodeEncodeError:
-            self.data = line_str.encode('utf-8', errors='replace')
+    def __init__(self, data: bytes):
+        # Save raw bytes directly to preserve fixed-length offsets
+        self.data = data
 
     def get_str(self, start, length):
         """指定バイト位置を切り出し、cp932でデコードして空白除去"""
