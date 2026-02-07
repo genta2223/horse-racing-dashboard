@@ -20,42 +20,7 @@ except ImportError as e:
     st.error(f"Module Import Error: {e}")
     st.stop()
 
-# ... (Config section unchanged) ...
 
-# ... (Inside tab_results) ...
-
-with tab_results:
-    st.header("🏆 Race Results (Scraped / netkeiba)")
-    
-    col_res1, col_res2 = st.columns([1, 3])
-    with col_res1:
-        if st.button("🔄 Update Results Now"):
-            with st.spinner("Scraping results..."):
-                # Fetch today's race_ids from DB
-                today_str = datetime.datetime.now(jst).strftime("%Y%m%d")
-                res_rids = supabase.table("raw_race_data").select("race_id").eq("race_date", today_str).execute()
-                if res_rids.data:
-                    count = 0
-                    progress_bar = st.progress(0)
-                    total = len(res_rids.data)
-                    
-                    for i, r in enumerate(res_rids.data):
-                        rid = r['race_id']
-                        data = scrape_race_results(rid)
-                        if data:
-                            supabase.table("race_results").upsert(data).execute()
-                            count += 1
-                        progress_bar.progress((i + 1) / total)
-                        time.sleep(0.5)
-                    st.success(f"Updated {count} records!")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.warning("No races found for today to scrape.")
-
-    # Show entries from race_results table
-    try:
-        res_r = supabase.table("race_results").select("*").order("timestamp", desc=True).limit(20).execute()
 
 
 # --- Config ---
@@ -306,7 +271,33 @@ with tab_monitor:
         st.dataframe(pd.DataFrame(res_hist.data), use_container_width=True)
 
 with tab_results:
-    st.header("🏆 Race Results (Scraped / 0B12)")
+    st.header("🏆 Race Results (Scraped / netkeiba)")
+    
+    col_res1, col_res2 = st.columns([1, 3])
+    with col_res1:
+        if st.button("🔄 Update Results Now"):
+            with st.spinner("Scraping results..."):
+                # Fetch today's race_ids from DB
+                today_str = datetime.datetime.now(jst).strftime("%Y%m%d")
+                res_rids = supabase.table("raw_race_data").select("race_id").eq("race_date", today_str).execute()
+                if res_rids.data:
+                    count = 0
+                    progress_bar = st.progress(0)
+                    total = len(res_rids.data)
+                    
+                    for i, r in enumerate(res_rids.data):
+                        rid = r['race_id']
+                        data = scrape_race_results(rid)
+                        if data:
+                            supabase.table("race_results").upsert(data).execute()
+                            count += 1
+                        progress_bar.progress((i + 1) / total)
+                        time.sleep(0.5)
+                    st.success(f"Updated {count} records!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning("No races found for today to scrape.")
     
     # Show entries from race_results table
     try:
