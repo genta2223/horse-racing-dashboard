@@ -240,7 +240,23 @@ def render_filter(available_places, available_columns):
 
 def render_horse_list(rid, df_merged):
     """ID: 004 Merged Horse & Odds List"""
-    st.write(f"🏇 **Horse List: {rid}**")
+    # Extract place and race number from race ID (format: YYYYMMDDPPRRCCXX)
+    # PP = place code (05=Tokyo, 06=Nakayama, etc.), RR = race number
+    place_codes = {
+        "01": "札幌", "02": "函館", "03": "福島", "04": "新潟",
+        "05": "東京", "06": "中山", "07": "中京", "08": "京都",
+        "09": "阪神", "10": "小倉"
+    }
+    
+    if rid and len(rid) >= 12:
+        place_code = rid[8:10]
+        race_num = rid[10:12]
+        place_name = place_codes.get(place_code, f"Place{place_code}")
+        race_num_display = int(race_num) if race_num.isdigit() else race_num
+        st.markdown(f"### 🏇 {place_name} {race_num_display}R")
+    else:
+        st.write(f"🏇 **Horse List: {rid}**")
+    
     if df_merged.empty:
         st.info("No horse data found.")
         return
