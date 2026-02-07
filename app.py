@@ -163,7 +163,7 @@ def fetch_todays_data(date_str):
                         odds_list = odds_map[rid].get("odds", [])
                         for o in odds_list:
                             if str(o.get("horse_num")) == umaban:
-                                horse_data["Odds"] = o.get("tan_odds", "--")
+                                horse_data["Odds"] = o.get("odds_tan", "--")
                                 break
                     
                     if umaban:
