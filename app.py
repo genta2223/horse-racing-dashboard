@@ -249,9 +249,14 @@ with tab_monitor:
             
         if res_logs.data:
             df_logs = pd.DataFrame(res_logs.data)
-            # Convert UTC to JST (UTC+9)
+            # Convert to JST (handle both tz-aware and tz-naive timestamps)
             if 'timestamp' in df_logs.columns:
-                df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp']).dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
+                df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp'])
+                # If already tz-aware, just convert; if not, localize first
+                if df_logs['timestamp'].dt.tz is None:
+                    df_logs['timestamp'] = df_logs['timestamp'].dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
+                else:
+                    df_logs['timestamp'] = df_logs['timestamp'].dt.tz_convert('Asia/Tokyo')
             st.dataframe(
                 df_logs[['timestamp', 'level', 'message', 'details']], 
                 use_container_width=True,
@@ -283,9 +288,13 @@ with tab_monitor:
         if res_history.data:
             df_hist = pd.DataFrame(res_history.data)
             
-            # Format Timestamp - Convert UTC to JST (UTC+9)
+            # Format Timestamp - Convert to JST (handle tz-aware)
             if 'created_at' in df_hist.columns:
-                df_hist['created_at'] = pd.to_datetime(df_hist['created_at']).dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
+                df_hist['created_at'] = pd.to_datetime(df_hist['created_at'])
+                if df_hist['created_at'].dt.tz is None:
+                    df_hist['created_at'] = df_hist['created_at'].dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
+                else:
+                    df_hist['created_at'] = df_hist['created_at'].dt.tz_convert('Asia/Tokyo')
             
             # Display Clean Table
             st.dataframe(
