@@ -143,12 +143,26 @@ def feature_engineering(df):
     
     return df
 
-def rule_base_predict(row):
-    """ルールベースによる簡易予測ロジック (緩和版)"""
+def rule_base_predict_score(row):
+    """ルールベーススコア計算 (Odds / Pop)"""
+    try:
+        odds = float(row.get('odds_tan', 0))
+        pop = float(row.get('pop_tan', 99))
+        if pop <= 0.1: pop = 1.0 # Avoid zero division
+        return odds / pop
+    except:
+        return 0.0
+
+def rule_base_predict_mark(row):
+    """ルールベース買い目フラグ"""
     # 条件: 単勝5倍以上100倍以下、かつ人気(1-10位)
-    # これにより、パイプラインの貫通を優先的に確認する
-    if 5.0 <= row['odds_tan'] <= 100.0 and row['pop_tan'] <= 10:
-        return 1.0 # 推奨
+    try:
+        odds = float(row.get('odds_tan', 0))
+        pop = float(row.get('pop_tan', 99))
+        if 5.0 <= odds <= 100.0 and pop <= 10:
+            return 1.0
+    except:
+        pass
     return 0.0
 
 def run_inference(date_str):
@@ -166,16 +180,22 @@ def run_inference(date_str):
         features = ['odds_tan', 'pop_tan', 'odds_per_pop', 'horse_num_int']
         X = df[features]
         try:
+            # 特徴量数の不一致などが発生する可能性があるためtry-except
+            # LightGBMの場合、特徴量数が違うとFatalになるが、Python側でキャッチできない場合もある。
+            # 事前にチェックする
+            if hasattr(model, 'n_features_') and model.n_features_ != len(features):
+                raise ValueError(f"Model expects {model.n_features_} features, but got {len(features)}")
+            
             df['pred_score'] = model.predict_proba(X)[:, 1] # クラス1の確率
             df['pred_mark'] = (df['pred_score'] > 0.5).astype(float)
         except Exception as e:
             print(f"[WARN] モデル推論中にエラーが発生しました。ルールベースに切り替えます: {e}")
-            df['pred_mark'] = df.apply(rule_base_predict, axis=1)
-            df['pred_score'] = df['pred_mark']
+            df['pred_score'] = df.apply(rule_base_predict_score, axis=1)
+            df['pred_mark'] = df.apply(rule_base_predict_mark, axis=1)
     else:
         # モデルがない場合
-        df['pred_mark'] = df.apply(rule_base_predict, axis=1)
-        df['pred_score'] = df['pred_mark']
+        df['pred_score'] = df.apply(rule_base_predict_score, axis=1)
+        df['pred_mark'] = df.apply(rule_base_predict_mark, axis=1)
 
     # デバッグ: 最初の5頭を無条件に表示
     print("\n--- DEBUG: TOP 5 HORSES LOADED ---")
@@ -190,7 +210,7 @@ def run_inference(date_str):
     print("="*80)
     
     # 推奨馬 (マークあり、またはスコア上位) を表示
-    recommended = df[df['pred_mark'] > 0].sort_values('pred_score', ascending=False)
+    recommended = df[df['pred_score'] > 0].sort_values('pred_score', ascending=False)
     
     if recommended.empty:
         print("推奨馬は見つかりませんでした。")
@@ -209,6 +229,70 @@ def run_inference(date_str):
             except:
                 print(f"{row['race_id']:<18} {row['horse_num']:<2} (Name Error) {row['odds_tan']:<5.1f} {int(row['pop_tan']):<3} {row['pred_score']:.3f}")
 
+    # --- DB 保存処理 ---
+    print("\n[INFO] Saving prediction results to Supabase...")
+    save_prediction_results(df)
+
+def save_prediction_results(df):
+    """予測結果を prediction_results テーブルに保存する"""
+    if df.empty: return
+
+    # 保存用リスト作成
+    payload = []
+    now_iso = datetime.datetime.now().isoformat()
+    
+    for _, row in df.iterrows():
+        # スコアが0のものは保存しない（または全頭保存するか？ユーザー要望は特に指定なしだが、容量節約のため0以外、あるいは全頭）
+        # ヒートマップ表示のためには全頭保存した方が良い（「低い」ことも情報）。
+        # ここでは全頭保存する。
+        
+        # float型に変換し、None/NaNを処理
+        score = row.get('pred_score', 0.0)
+        if pd.isna(score): score = 0.0
+        
+        p_mark = int(row.get('pred_mark', 0))
+        
+        item = {
+            "race_id": str(row['race_id']),
+            "horse_num": str(row['horse_num']),
+            "predict_score": round(float(score), 3), # 小数点第3位まで保持
+            "predict_flag": p_mark,
+            "created_at": now_iso
+        }
+        payload.append(item)
+    
+    if not payload:
+        return
+
+    # SupabaseへUpsert (一括)
+    # 実際にはデータ量が多いと分割が必要だが、1日分なら数千件なので分割推奨
+    batch_size = 500
+    total_saved = 0
+    
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    rest_url = f"{url}/rest/v1/prediction_results"
+    
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates" # upsert based on primary key (race_id, horse_num)
+    }
+
+    for i in range(0, len(payload), batch_size):
+        batch = payload[i:i+batch_size]
+        try:
+            resp = requests.post(rest_url, headers=headers, json=batch)
+            if resp.status_code in (200, 201, 204):
+                total_saved += len(batch)
+            else:
+                print(f"[ERROR] Save failed: {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Save request error: {e}")
+            
+    print(f"[INFO] Saved {total_saved} prediction records.")
+
 if __name__ == "__main__":
     # Windows用エンコーディング対策
     try:
@@ -223,6 +307,7 @@ if __name__ == "__main__":
     if not target_date:
         # デフォルトは明日 (現在時刻が 21:47 なので、明日のデータを想定)
         now = datetime.datetime.now()
+        # カレンダー通り翌日、または当日夜なら翌日
         tomorrow = now + datetime.timedelta(days=1)
         target_date = tomorrow.strftime("%Y%m%d")
         

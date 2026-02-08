@@ -338,73 +338,83 @@ class DataUploader:
         self.jv.JVClose()
         return uploaded
 
-    def run(self, target_date: datetime.date = None):
-        """Main execution - Two-phase collection for odds data"""
+    def fetch_race_results(self, start_date: datetime.date, end_date: datetime.date):
+        """Fetch 0B12 (Race Results) using JVRTOpen (Realtime/Diff) for specific range"""
+        print(f"\n>> Fetching 0B12 (Race Results) from {start_date} to {end_date}...")
+        
+        total = 0
+        current = start_date
+        while current <= end_date:
+            # JRA-VAN 0B12 is available via JVRTOpen with YYYYMMDD key
+            # It returns the latest results (Preliminary or Fixed)
+            uploaded = self.fetch_and_upload("0B12", current)
+            total += uploaded
+            current += datetime.timedelta(days=1)
+            
+        print(f"\n   >> 0B12 Total: {total} records uploaded.")
+        return total
+
+    def run(self, target_date: datetime.date = None, mode: str = "auto"):
+        """Main execution with mode support"""
         if target_date is None:
             target_date = datetime.date.today()
         
         date_str = target_date.strftime("%Y%m%d")
-        print(f"\n[TARGET DATE] {target_date}")
+        print(f"\n[TARGET DATE] {target_date} [MODE] {mode}")
         
         total_uploaded = 0
-        race_keys = set()
         
-        # Phase 1: Fetch 0B15 (Race Card) with date key - also collect race keys
-        print(f"\n>> Phase 1: Fetching 0B15 (Race Card)...")
-        uploaded_0b15 = self.fetch_and_upload("0B15", target_date)
-        total_uploaded += uploaded_0b15
-        
-        # Query Supabase to get unique race IDs for today
-        try:
-            url = f"{self.supabase_url}/rest/v1/raw_race_data"
-            req = urllib.request.Request(
-                f"{url}?select=race_id&data_type=eq.0B15&race_date=eq.{date_str}",
-                headers={
-                    "apikey": self.supabase_key,
-                    "Authorization": f"Bearer {self.supabase_key}",
-                },
-                method="GET"
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                for row in data:
-                    rid = row.get('race_id', '')
-                    # Extract race key (first 16 chars: YYYYMMDDJJKKHHRR)
-                    if rid and len(rid) >= 16:
-                        race_keys.add(rid[:16])
-        except Exception as e:
-            print(f"[WARN] Could not fetch race list: {e}")
-        
-        print(f"   Found {len(race_keys)} unique races for {date_str}")
-        
-        # Phase 2: Fetch 0B31/0B32 for each race
-        if race_keys:
-            print(f"\n>> Phase 2: Fetching odds for each race...")
+        # MODE: RESULTS (Past 0B12)
+        if mode in ["results", "friday"]:
+            # Fetch past 7 days results
+            start_date = target_date - datetime.timedelta(days=7)
+            end_date = target_date 
+            print(f"\n>> Phase: Results (0B12) from {start_date} to {end_date}")
+            total_uploaded += self.fetch_race_results(start_date, end_date)
             
-            for dataspec, desc in [("0B31", "Tan/Fuku Odds"), ("0B32", "Ren Odds")]:
-                spec_uploaded = 0
-                for i, race_key in enumerate(sorted(race_keys)):
-                    uploaded = self.fetch_odds_by_race(dataspec, race_key, date_str)
-                    spec_uploaded += uploaded
-                    if uploaded > 0:
-                        print(f"   {dataspec}: {race_key} -> {uploaded} records", end="\r")
-                
-                print(f"\n   >> {dataspec}: {spec_uploaded} records uploaded.")
-                total_uploaded += spec_uploaded
+        # MODE: CARDS (Upcoming 0B15)
+        if mode in ["cards", "friday", "auto"]:
+            print(f"\n>> Phase: Race Cards (0B15) for {date_str}...")
+            total_uploaded += self.fetch_and_upload("0B15", target_date)
+            
+        # MODE: ODDS (Realtime 0B31/32)
+        if mode in ["odds", "auto"]:
+            # Only run if we have race keys (which implies we fetched Cards or queried DB)
+            # Query DB for keys
+            race_keys = set()
+            try:
+                url = f"{self.supabase_url}/rest/v1/raw_race_data"
+                req = urllib.request.Request(
+                    f"{url}?select=race_id&data_type=eq.0B15&race_date=eq.{date_str}",
+                    headers={"apikey": self.supabase_key, "Authorization": f"Bearer {self.supabase_key}"},
+                    method="GET"
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    for row in data:
+                        rid = row.get('race_id', '')
+                        if rid and len(rid) >= 16: race_keys.add(rid[:16])
+            except: pass
+            
+            if race_keys:
+                print(f"\n>> Phase: Realtime Odds (0B31/0B32) for {len(race_keys)} races...")
+                for dataspec in ["0B31", "0B32"]:
+                    spec_uploaded = 0
+                    for race_key in sorted(race_keys):
+                        spec_uploaded += self.fetch_odds_by_race(dataspec, race_key, date_str)
+                    print(f"   >> {dataspec}: {spec_uploaded} uploaded.")
+                    total_uploaded += spec_uploaded
         
-        print(f"\n{'='*50}")
-        print(f"[DONE] Total {total_uploaded} records uploaded.")
-        print(f"{'='*50}")
-        
+        print(f"\n[DONE] Total {total_uploaded} records.")
         return total_uploaded
 
 
 def main():
     parser = argparse.ArgumentParser(description="JRA Data Collector")
     parser.add_argument("--date", type=str, help="Target date (YYYYMMDD)")
+    parser.add_argument("--mode", type=str, default="auto", choices=["auto", "results", "cards", "odds", "friday"], help="Collection mode")
     args = parser.parse_args()
     
-    # Parse target date
     target_date = None
     if args.date:
         try:
@@ -412,9 +422,10 @@ def main():
         except ValueError:
             print(f"[ERROR] Invalid date format: {args.date}")
             sys.exit(1)
-    
+            
     uploader = DataUploader()
-    uploader.run(target_date)
+    uploader.run(target_date, args.mode)
+
 
 
 if __name__ == "__main__":

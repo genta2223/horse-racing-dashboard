@@ -27,19 +27,21 @@ CMD_PREDICT = ["py"]
 def log(message):
     # Windows cp932 safe output
     try:
-        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}", flush=True)
     except UnicodeEncodeError:
         safe_msg = message.encode('cp932', errors='replace').decode('cp932')
-        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {safe_msg}")
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {safe_msg}", flush=True)
 
 def run_script(cmd, script_name, args=None):
     if args is None: args = []
     try:
         full_cmd = cmd + [script_name] + args
         log(f"Starting {script_name} with {full_cmd}...")
+        
+        # Run subprocess and stream output directly
         result = subprocess.run(
             full_cmd, 
-            capture_output=True, 
+            capture_output=False,  # Stream to stdout
             text=True, 
             encoding='utf-8',
             errors='replace',
@@ -48,27 +50,23 @@ def run_script(cmd, script_name, args=None):
         
         if result.returncode == 0:
             log(f"[OK] {script_name} completed successfully.")
-            # Show last 5 lines of output
-            if result.stdout:
-                lines = result.stdout.strip().split('\n')
-                for line in lines[-5:]:
-                    try:
-                        print(f"    > {line}")
-                    except:
-                        pass
         else:
-            log(f"[ERROR] {script_name} failed:")
-            if result.stderr:
-                try:
-                    print(result.stderr[:500])
-                except:
-                    pass
+            log(f"[ERROR] {script_name} failed with code {result.returncode}")
+
     except Exception as e:
         log(f"[ERROR] Error running {script_name}: {e}")
 
+import argparse
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force-friday", action="store_true", help="Force run Friday sequence")
+    args = parser.parse_args()
+
     log("=" * 60)
     log("AI Auto-Pilot Started (Hybrid Mode: 32bit/64bit)")
+    if args.force_friday:
+        log("MODE: Force Friday Sequence")
     log("=" * 60)
     log("Data Collection: 32bit Python (JRA-VAN)")
     log("AI Prediction:   64bit Python (Pandas/Sklearn)")
@@ -85,21 +83,42 @@ def main():
         start_time = now.replace(hour=9, minute=0, second=0, microsecond=0)
         end_time = now.replace(hour=16, minute=30, second=0, microsecond=0)
 
-        if now < start_time:
-            wait_seconds = (start_time - now).total_seconds()
-            log(f"Sleeping until 9:00 AM... ({wait_seconds/60:.0f} minutes)")
-            time.sleep(min(1800, wait_seconds))
-            continue
-        elif now > end_time:
-            log("Racing finished for today. Exiting.")
+        # Force run bypasses time check
+        if not args.force_friday:
+            if now < start_time:
+                wait_seconds = (start_time - now).total_seconds()
+                log(f"Sleeping until 9:00 AM... ({wait_seconds/60:.0f} minutes)")
+                time.sleep(min(1800, wait_seconds))
+                continue
+            elif now > end_time:
+                log("Racing finished for today. Exiting.")
+                break
+
+        # === Friday Golden Sequence ===
+        # Check if it's Friday and time is after 18:00 (for weekend prep)
+        # OR manual override via command line (TODO)
+        # For now, let's implement a specific trigger or check day of week
+        weekday = now.weekday() # Monday=0, Friday=4
+        if args.force_friday or (weekday == 4 and now.hour >= 18):
+            log("--- FRIDAY GOLDEN SEQUENCE ---")
+            log("Phase 1: Fetch Past Results (0B12)")
+            run_script(CMD_COLLECT, "worker_collector.py", args=["--mode", "results"])
+            
+            log("Phase 2: Fetch Weekend Cards (0B15)")
+            run_script(CMD_COLLECT, "worker_collector.py", args=["--mode", "cards", "--date", today_str])
+            
+            log("Phase 3: AI Prediction")
+            run_script(CMD_PREDICT, "worker_predict.py", args=["--date", today_str])
+            
+            log("Friday Sequence Completed. Exiting to wait for weekend.")
             break
 
-        # === Execute Cycle ===
+        # === Execute Regular Cycle ===
         cycle_count += 1
         log(f"--- Cycle #{cycle_count} ---")
 
         # 1. Data Collection (32bit Python for JRA-VAN)
-        run_script(CMD_COLLECT, "worker_collector.py", args=["--date", today_str])
+        run_script(CMD_COLLECT, "worker_collector.py", args=["--mode", "auto", "--date", today_str])
 
         # 2. AI Prediction (64bit Python for ML libraries)
         run_script(CMD_PREDICT, "worker_predict.py", args=["--date", today_str])

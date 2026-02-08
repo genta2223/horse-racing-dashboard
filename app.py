@@ -89,6 +89,10 @@ def fetch_todays_data(date_str):
         # 3. Get 0B12 (Results)
         res_r = supabase.table("raw_race_data").select("race_id, content").eq("data_type", "0B12").eq("race_date", date_str).execute()
         
+        # 4. Get Prediction Results
+        # race_id based filter (YYYYMMDD%)
+        res_p = supabase.table("prediction_results").select("race_id, horse_num, predict_score, predict_flag").like("race_id", f"{date_str}%").execute()
+        
         # --- Process Horses (0B15) ---
         horses_list = []
         parsed_races = []
@@ -104,13 +108,10 @@ def fetch_todays_data(date_str):
             try:
                 c = json.loads(r['content'])
                 if c.get('record_type') == 'SE':
-                    # Use race_id from parsed content, not from DB column (which is now unique key)
                     rid = c.get('race_id', '')
-                    if not rid:
-                        continue
+                    if not rid: continue
                     h_row = c.copy()
                     h_row['race_id'] = rid
-                    # Standardize umaban for merge (usually 2 chars with leading zero)
                     h_row['horse_num'] = str(h_row.get('horse_num', '')).zfill(2)
                     horses_list.append(h_row)
                     
@@ -136,7 +137,6 @@ def fetch_todays_data(date_str):
             rid = r['race_id']
             try:
                 c = json.loads(r['content'])
-                # odds is a list in 0B30 spec
                 for o in c.get('odds', []):
                     o_row = o.copy()
                     o_row['race_id'] = rid
@@ -147,10 +147,15 @@ def fetch_todays_data(date_str):
         df_odds = pd.DataFrame(odds_list)
         if not df_odds.empty:
             df_odds = df_odds.drop_duplicates(subset=['race_id', 'horse_num'], keep='last')
+            
+        # --- Process Predictions ---
+        df_pred = pd.DataFrame(res_p.data if res_p.data else [])
+        if not df_pred.empty:
+            df_pred['horse_num'] = df_pred['horse_num'].astype(str).str.zfill(2)
+            df_pred = df_pred.drop_duplicates(subset=['race_id', 'horse_num'], keep='last')
         
         # --- Merge Phase (Pandas) ---
         if not df_horses.empty and not df_odds.empty:
-            # Left Join on race_id and horse_num
             df_merged = pd.merge(df_horses, df_odds[['race_id', 'horse_num', 'odds_tan', 'pop_tan']], 
                                  on=['race_id', 'horse_num'], how='left')
         else:
@@ -158,6 +163,17 @@ def fetch_todays_data(date_str):
             if not df_merged.empty:
                 df_merged['odds_tan'] = None
                 df_merged['pop_tan'] = None
+                
+        # Merge Predictions if available
+        if not df_merged.empty and not df_pred.empty:
+            df_merged = pd.merge(df_merged, df_pred[['race_id', 'horse_num', 'predict_score', 'predict_flag']],
+                                 on=['race_id', 'horse_num'], how='left')
+            # Fill NaN
+            df_merged['predict_score'] = df_merged['predict_score'].fillna(0.0)
+            df_merged['predict_flag'] = df_merged['predict_flag'].fillna(0)
+        elif not df_merged.empty:
+             df_merged['predict_score'] = 0.0
+             df_merged['predict_flag'] = 0
         
         # --- Process Results (Payoffs) ---
         parsed_payoffs = {}
@@ -340,107 +356,211 @@ def render_payoff_data(selected_rid, payoffs_map):
 
 # --- 4. Main Layout ---
 
+@st.cache_data(ttl=60)
+def fetch_available_dates():
+    """Fetch distinct race_dates from raw_race_data (0B15)"""
+    if not supabase: return []
+    try:
+        # Limit to 100 recent entries to find dates
+        res = supabase.table("raw_race_data").select("race_date").eq("data_type", "0B15").order("race_date", desc=True).limit(200).execute()
+        if res.data:
+            # Extract unique dates and sort descending
+            dates = sorted(list(set([r['race_date'] for r in res.data])), reverse=True)
+            return dates
+    except Exception as e:
+        print(f"Date Fetch Error: {e}")
+    return []
+
+def render_date_selector(available_dates):
+    """ID: 002 Date Selector"""
+    st.write("📅 **Date Selection**")
+    
+    if not available_dates:
+        st.warning("No data found in DB.")
+        # Fallback to today if no data
+        return now_jst.strftime("%Y%m%d")
+    
+    # Default selection logic:
+    # 1. Today
+    # 2. Closest future date
+    # 3. Newest past date (index 0)
+    today_str = now_jst.strftime("%Y%m%d")
+    default_ix = 0
+    
+    if today_str in available_dates:
+        default_ix = available_dates.index(today_str)
+    
+    selected_date = st.selectbox("Select Date:", available_dates, index=default_ix, key="main_date_selector")
+    return selected_date
+
+# --- 4. Main Layout ---
+
 def main():
+    # Sidebar: System Status Only
     with st.sidebar:
-        st.header("Debug Console")
+        st.header("System Status")
         st.write("Mode: Gatekeeper Validated")
-        st.write(f"Current Date: {now_jst.strftime('%Y-%m-%d')}")
+        st.write(f"Server Time: {now_jst.strftime('%Y-%m-%d %H:%M')}")
         
-    # Toggle to Tomorrow if desired (Debug helper)
-    target_date = now_jst
-    if st.sidebar.checkbox("View Tomorrow's Data (2026-02-08)", value=True):
-        target_date = datetime.datetime(2026, 2, 8, tzinfo=jst)
+        status_color = "green" if supabase else "red"
+        status_text = "Online" if supabase else "Offline"
+        st.markdown(f"**DB Connection**: :{status_color}[{status_text}]")
         
-    date_str = target_date.strftime("%Y%m%d")
+        if st.button("Clear Cache"):
+            st.cache_data.clear()
+            st.rerun()
+
+    # Main Area
+    debug_container("001", "Header Area", render_header)
+    
+    # 1. Date Selection
+    available_dates = fetch_available_dates()
+    
+    # Layout for filters: Date | Place | RaceNum
+    st.markdown("---")
+    c_date, c_place, c_num = st.columns([1, 1, 1])
+    
+    with c_date:
+        date_str = render_date_selector(available_dates)
+        
+    # Fetch Data for selected date
     df_races, df_merged, todays_payoffs = fetch_todays_data(date_str)
     
     if df_races.empty:
-        st.warning(f"No race data found for {date_str}. Please run ingestion for this date.")
+        st.warning(f"No race data found for {date_str}.")
         return
 
+    # 2. Place & RaceNum Filters
+    # Calculate available options properly
+    place_options = ["All"] + sorted(list(set([f"{p['Place']} ({p['Race ID'][8:10]})" for p in df_races.to_dict('records')])))
+    
+    with c_place:
+        st.write("📍 **Place**")
+        sel_place = st.selectbox("Select Place:", place_options, key="filter_place")
+        
+    with c_num:
+        st.write("🏁 **Race Num**")
+        r_nums = ["All"] + [f"{i:02d}" for i in range(1, 13)]
+        sel_num = st.selectbox("Select Race:", r_nums, key="filter_race")
+
+    filters = {"place": sel_place, "race_num": sel_num}
+    
+    # Apply Filters
+    filtered_races = df_races.copy()
+    if filters.get("place") != "All":
+        code = filters['place'].split("(")[-1].replace(")", "")
+        filtered_races = filtered_races[filtered_races['Race ID'].str.slice(8,10) == code]
+    
+    if filters.get("race_num") != "All":
+        num = filters['race_num']
+        filtered_races = filtered_races[filtered_races['Race ID'].str.slice(14,16) == num]
+
+    # Tabs
     tab1, tab2 = st.tabs(["📋 Dashboard", "🤖 AI予測"])
     
     with tab1:
-        debug_container("001", "Header Area", render_header)
-        filters = debug_container("003", "Filter Area", render_filter, df_races.to_dict('records'), list(df_races.columns))
-        
-        st.write("### 🏁 Select a Race")
-        filtered_races = df_races.copy()
-        if filters.get("place") != "All":
-            code = filters['place'].split("(")[-1].replace(")", "")
-            filtered_races = filtered_races[filtered_races['Race ID'].str.slice(8,10) == code]
-        
-        if filters.get("race_num") != "All":
-            num = filters['race_num']
-            filtered_races = filtered_races[filtered_races['Race ID'].str.slice(14,16) == num]
+        st.write(f"### 🏁 Race List ({date_str})")
         
         if not filtered_races.empty:
             st.dataframe(filtered_races, use_container_width=True, hide_index=True)
-            selected_rid = st.selectbox("View details for Race ID:", filtered_races['Race ID'].tolist(), key="rid_dash")
+            
+            # Race Detail Selector (within filtered)
+            race_options_dash = [f"{r['Place']} {r['Round']} ({r['Race ID']})" for _, r in filtered_races.iterrows()]
+            selected_option_dash = st.selectbox("View details for:", race_options_dash, key="rid_dash_sel")
+            selected_rid = selected_option_dash.split("(")[-1].replace(")", "")
             
             debug_container("004", "Merged Horse/Odds List", render_horse_list, selected_rid, df_merged)
             render_payoff_data(selected_rid, todays_payoffs)
         else:
             st.warning("No races match the selected filters.")
-
+            
     with tab2:
-        st.header("AI Prediction Mode")
-        if df_races.empty:
-            st.warning("No race data loaded.")
+        st.header(f"AI Prediction Mode ({date_str})")
+        if filtered_races.empty:
+             st.warning("No races found matching filters.")
         else:
-            # Format selectbox options to show place and race number
+            # AI Tab also respects filters
             race_options = []
-            for _, row in df_races.iterrows():
+            for _, row in filtered_races.iterrows():
                 rid = row['Race ID']
                 place = row.get('Place', rid[8:10])
                 race_num = row.get('Round', f"{int(rid[14:16])}R")
                 race_options.append(f"{place} {race_num} ({rid})")
             
             selected_option = st.selectbox("Select Race for AI Analysis:", race_options, key="rid_ai")
-            # Extract race_id from selection
             selected_rid_ai = selected_option.split("(")[-1].replace(")", "")
             
             df_curr = df_merged[df_merged['race_id'] == selected_rid_ai].copy()
             
+            # ... (Existing logic for prediction display) ...
+            if df_curr['odds_tan'].isna().all() and 'predict_score' not in df_curr.columns:
+                 # Check if we have prediction results even if odds are missing? 
+                 # Usually odds come with prediction.
+                 pass
+
             if df_curr['odds_tan'].isna().all():
-                st.warning("⚠️ オッズデータが不足しているため、正確な予測ができません。ダミーデータでテストしますか？")
-                if st.button("Generate Test Odds"):
-                    df_curr['odds_tan'] = np.random.randint(50, 500, size=len(df_curr))
-                    df_curr['pop_tan'] = np.random.randint(1, 15, size=len(df_curr))
-                else:
-                    st.stop()
+                 # Allow demo if button clicked (only if no prediction result exists)
+                 if 'predict_score' in df_curr.columns and (df_curr['predict_score'] > 0).any():
+                     pass # We have scores, so proceed
+                 else:
+                    st.warning("⚠️ オッズデータが不足しているため、正確な予測ができません。ダミーデータでテストしますか？")
+                    if st.button("Generate Test Odds"):
+                        df_curr['odds_tan'] = np.random.randint(50, 500, size=len(df_curr))
+                        df_curr['pop_tan'] = np.random.randint(1, 15, size=len(df_curr))
+                    else:
+                        st.stop()
             
-            df_pred = run_ai_prediction(df_curr)
-            
-            # Extract place and race info for display
-            place_map = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟",
-                         "05": "東京", "06": "中山", "07": "中京", "08": "京都", 
-                         "09": "阪神", "10": "小倉"}
-            jj = selected_rid_ai[8:10]
-            race_num = int(selected_rid_ai[14:16])
-            place_name = place_map.get(jj, f"場{jj}")
-            
-            st.subheader(f"📍 {place_name} {race_num}R の予測結果")
-            rec = df_pred[df_pred['pred_mark'] > 0].sort_values('odds_tan_val', ascending=False)
+            # Use stored prediction if available
+            if 'predict_score' in df_curr.columns and (df_curr['predict_score'] > 0).any():
+                df_pred = df_curr.copy()
+                df_pred['pred_score'] = df_pred['predict_score']
+                df_pred['pred_mark'] = df_pred.get('predict_flag', 0)
+                # Validation cols
+                df_pred['odds_tan_val'] = pd.to_numeric(df_pred['odds_tan'], errors='coerce') / 10.0
+                df_pred['pop_tan_val'] = pd.to_numeric(df_pred['pop_tan'], errors='coerce')
+                st.info("💡 保存済みの予測データを表示しています")
+            else:
+                # Fallback
+                st.warning("⚠️ 保存された予測データがないため、簡易ルールベースで計算します")
+                df_pred = run_ai_prediction(df_curr)
+
+            # Sort and Display
+            rec = df_pred.sort_values('pred_score', ascending=False)
             
             if rec.empty:
-                st.info("このレースには推奨馬がいません（ルールベース条件に合致しません）。")
+                st.info("表示するデータがありません。")
             else:
-                st.success(f"推奨馬が {len(rec)} 頭見つかりました！")
-                # Add place and race columns
+                place_map = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟",
+                             "05": "東京", "06": "中山", "07": "中京", "08": "京都", 
+                             "09": "阪神", "10": "小倉"}
+                jj = selected_rid_ai[8:10]
+                race_num = int(selected_rid_ai[14:16])
+                place_name = place_map.get(jj, f"場{jj}")
+                
                 rec = rec.copy()
                 rec['場所'] = place_name
                 rec['R'] = f"{race_num}R"
+                rec['単勝'] = rec['odds_tan_val']
+                rec['人気'] = rec['pop_tan_val']
+                rec['AIスコア'] = rec['pred_score']
+                
+                def highlight_high_score(val):
+                    color = 'font-weight: bold;' if val >= 2.0 else ''
+                    return color
+
+                st.subheader(f"📍 {place_name} {race_num}R 予測結果")
                 st.dataframe(
-                    rec[['場所', 'R', 'horse_num', 'horse_name', 'odds_tan_val', 'pop_tan_val', 'pred_score']].rename(columns={
-                        'horse_num': '番', 'horse_name': '馬名', 'odds_tan_val': '単勝', 'pop_tan_val': '人気', 'pred_score': '妙味度(Odds/Pop)'
-                    }),
+                    rec[['場所', 'R', 'horse_num', 'horse_name', '単勝', '人気', 'AIスコア', 'pred_mark']]
+                    .style
+                    .background_gradient(subset=['AIスコア'], cmap='YlOrRd', vmin=0, vmax=5)
+                    .format({"単勝": "{:.1f}", "AIスコア": "{:.3f}", "人気": "{:.0f}"})
+                    .applymap(highlight_high_score, subset=['AIスコア']),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "単勝": st.column_config.NumberColumn("単勝", format="%.1f"),
-                        "人気": st.column_config.NumberColumn("人気", format="%d"),
-                        "妙味度(Odds/Pop)": st.column_config.NumberColumn("妙味度", format="%.2f", help="Odds / Popularity Ratio"),
+                        "horse_num": st.column_config.TextColumn("番"),
+                        "horse_name": st.column_config.TextColumn("馬名"),
+                        "pred_mark": st.column_config.NumberColumn("Mark", format="%d")
                     }
                 )
 
