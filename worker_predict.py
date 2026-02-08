@@ -82,6 +82,13 @@ def fetch_data(date_str):
             horses.append(h_row)
     
     df_h = pd.DataFrame(horses)
+    # Deduplicate db_h: Keep last entry for each (race_id, horse_num)
+    # Assuming the API returns data in vague insertion order, but explicit sort by something would be better if available.
+    # Since we can't easily sort by created_at here without adding it to the list, we assume the list 'horses' 
+    # reflects the fetch order. Typically Supabase returns oldest first or newest first. 
+    # Let's trust insertion order for now and keep 'last'.
+    if not df_h.empty:
+        df_h = df_h.drop_duplicates(subset=['race_id', 'horse_num'], keep='last')
     
     # Odds
     odds = []
@@ -96,6 +103,9 @@ def fetch_data(date_str):
                 odds.append(o_row)
     
     df_o = pd.DataFrame(odds)
+    # Deduplicate df_o
+    if not df_o.empty:
+        df_o = df_o.drop_duplicates(subset=['race_id', 'horse_num'], keep='last')
     
     # Merge
     if not df_h.empty and not df_o.empty:

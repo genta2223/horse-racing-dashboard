@@ -12,7 +12,7 @@ SPECS = {
             "horse_name":   {"start": 40, "len": 28},
             "sex_code":     {"start": 297, "len": 1},
             "hair_code":    {"start": 298, "len": 2},
-            "age":          {"start": 299, "len": 1},
+            "age":          {"start": 300, "len": 1},
             "weight":       {"start": 288, "len": 3},
             "jockey":       {"start": 306, "len": 12},
         }

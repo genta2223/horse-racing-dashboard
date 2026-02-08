@@ -127,6 +127,8 @@ def fetch_todays_data(date_str):
             except: continue
 
         df_horses = pd.DataFrame(horses_list)
+        if not df_horses.empty:
+            df_horses = df_horses.drop_duplicates(subset=['race_id', 'horse_num'], keep='last')
         
         # --- Process Odds (0B30/31) ---
         odds_list = []
@@ -143,6 +145,8 @@ def fetch_todays_data(date_str):
             except: continue
         
         df_odds = pd.DataFrame(odds_list)
+        if not df_odds.empty:
+            df_odds = df_odds.drop_duplicates(subset=['race_id', 'horse_num'], keep='last')
         
         # --- Merge Phase (Pandas) ---
         if not df_horses.empty and not df_odds.empty:
@@ -202,13 +206,18 @@ def run_ai_prediction(df_race):
         # Rule-base fallback (Relaxed)
         mask = (df['odds_tan_val'] >= 5.0) & (df['odds_tan_val'] <= 100.0) & (df['pop_tan_val'] <= 10)
         df.loc[mask, 'pred_mark'] = 1.0
-        df.loc[mask, 'pred_score'] = 1.0
+        
+        # Calculate Score as Odds / Pop
+        pops = df.loc[mask, 'pop_tan_val'].replace(0, 1)
+        df.loc[mask, 'pred_score'] = df.loc[mask, 'odds_tan_val'] / pops
     else:
         df['pred_score'] = 0.0
         df['pred_mark'] = 0.0
         mask = (df['odds_tan_val'] >= 5.0) & (df['odds_tan_val'] <= 100.0) & (df['pop_tan_val'] <= 10)
         df.loc[mask, 'pred_mark'] = 1.0
-        df.loc[mask, 'pred_score'] = 1.0
+        
+        pops = df.loc[mask, 'pop_tan_val'].replace(0, 1)
+        df.loc[mask, 'pred_score'] = df.loc[mask, 'odds_tan_val'] / pops
         
     return df
 
@@ -424,10 +433,15 @@ def main():
                 rec['R'] = f"{race_num}R"
                 st.dataframe(
                     rec[['場所', 'R', 'horse_num', 'horse_name', 'odds_tan_val', 'pop_tan_val', 'pred_score']].rename(columns={
-                        'horse_num': '番', 'horse_name': '馬名', 'odds_tan_val': '単勝', 'pop_tan_val': '人気', 'pred_score': 'AIスコア'
+                        'horse_num': '番', 'horse_name': '馬名', 'odds_tan_val': '単勝', 'pop_tan_val': '人気', 'pred_score': '妙味度(Odds/Pop)'
                     }),
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    column_config={
+                        "単勝": st.column_config.NumberColumn("単勝", format="%.1f"),
+                        "人気": st.column_config.NumberColumn("人気", format="%d"),
+                        "妙味度(Odds/Pop)": st.column_config.NumberColumn("妙味度", format="%.2f", help="Odds / Popularity Ratio"),
+                    }
                 )
 
 if __name__ == "__main__":

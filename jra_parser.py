@@ -31,9 +31,9 @@ class JRAParser:
         if data_type == "0B15":
             if record_type != "SE":
                 return None
-            if data_div not in ["2", "7"]:
-                # '2'(前日) または '7'(確定) のみを許可
-                print(f"[REJECTED] Skipped invalid data div: {record_type}{data_div} (Strictly 2 or 7 only)")
+            if data_div not in ["2", "7", "9"]:
+                # '2'(前日) または '7'(確定) または '9'(中止?) のみを許可
+                print(f"[REJECTED] Skipped invalid data div: {record_type}{data_div} (Strictly 2, 7 or 9)")
                 return None
 
         # 0B12 (成績): SE または HR のみ許可
@@ -79,18 +79,54 @@ class JRAParser:
             reg_horses = int(reg_horses_str) if reg_horses_str.isdigit() else 0
             res["registered_horses"] = reg_horses
             
-            items = []
-            for i in range(reg_horses):
-                item_start = header_len + (i * item_len)
-                if item_start + item_len > len(self.data):
-                    break
+            # If reg_horses is 0 or invalid (e.g. **), try to parse anyway
+            # O1 (単複) records: fixed 18 horse slots starting at offset 43
+            # Each slot is 8 bytes: 2 bytes horse_num + 4 bytes odds + 2 bytes padding
+            if reg_horses == 0 and data_type in ["0B30", "0B31"]:
+                # For O1 records, odds start at byte 43, each horse entry is 8 bytes
+                # Format: NN=horse_num(2), OOOO=odds_tan(4), PP=padding(2)
+                items = []
+                for i in range(18):  # Max 18 horses
+                    item_start = 43 + (i * 8)  # O1 format: verified starts at 43
+                    if item_start + 8 > len(self.data):
+                        break
                     
-                item_data = {}
-                for col, pos in spec_config["columns"].items():
-                    item_data[col] = self.get_str(item_start + pos["start"], pos["len"])
-                items.append(item_data)
-            
-            res["odds"] = items
+                    horse_num = self.get_str(item_start, 2)
+                    odds_tan = self.get_str(item_start + 2, 4)
+                    
+                    # Skip empty entries or horse_num out of range
+                    if not horse_num or not horse_num.isdigit():
+                        continue
+                    if int(horse_num) < 1 or int(horse_num) > 18:
+                        continue
+                    
+                    # Handle masked odds (****)
+                    if odds_tan == "****" or not odds_tan.strip():
+                        odds_tan = "0"  # Mark as unavailable
+                    else:
+                        odds_tan = odds_tan.strip()
+                    
+                    item_data = {
+                        "horse_num": horse_num.zfill(2),
+                        "odds_tan": odds_tan,
+                        "pop_tan": "0"  # Will be parsed separately if needed
+                    }
+                    items.append(item_data)
+                
+                res["odds"] = items
+            else:
+                items = []
+                for i in range(reg_horses):
+                    item_start = header_len + (i * item_len)
+                    if item_start + item_len > len(self.data):
+                        break
+                        
+                    item_data = {}
+                    for col, pos in spec_config["columns"].items():
+                        item_data[col] = self.get_str(item_start + pos["start"], pos["len"])
+                    items.append(item_data)
+                
+                res["odds"] = items
 
         # 共通処理: race_id の生成 (全種別共通のバイト位置 11-26を使用)
         if "race_id" not in res:

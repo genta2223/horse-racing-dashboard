@@ -241,29 +241,156 @@ class DataUploader:
         print(f"\n   >> {dataspec}: {uploaded}/{count} records uploaded.")
         return uploaded
     
+    def fetch_odds_by_race(self, dataspec: str, race_key: str, date_str: str):
+        """Fetch odds data for a specific race using race-level key"""
+        # 0B31/0B32 require race-level key: YYYYMMDDJJKKHHRR or YYYYMMDDJJRR
+        # race_key format from 0B15: YYYYMMDDJJKKHHRR (16 chars)
+        
+        open_res = self.jv.JVRTOpen(dataspec, race_key)
+        
+        if isinstance(open_res, tuple):
+            ret_code = open_res[0]
+        else:
+            ret_code = open_res
+        
+        if ret_code < 0:
+            # Silently skip - odds may not be available yet for this race
+            self.jv.JVClose()
+            return 0
+        
+        uploaded = 0
+        while True:
+            try:
+                read_res = self.jv.JVRead("", 200000, "")
+                
+                if isinstance(read_res, tuple):
+                    ret_code = read_res[0]
+                    raw_data = str(read_res[1]).strip() if read_res[1] else ""
+                    
+                    # Correct Dataspec detection from filename
+                    # JVRead returns (ret_code, data, size, filename)
+                    if len(read_res) >= 4:
+                         filename = read_res[3]
+                         if filename and len(filename) >= 4:
+                             real_dataspec = filename[:4]
+                         else:
+                             real_dataspec = dataspec
+                    else:
+                         real_dataspec = dataspec
+                else:
+                    ret_code = read_res
+                    raw_data = ""
+                    real_dataspec = dataspec
+                
+                if ret_code == 0 or ret_code == -1 or ret_code < 0:
+                    break
+                
+                if ret_code > 0 and raw_data:
+                    # Parse odds data using REAL spec
+                    parsed_data = self.parse_odds_data(raw_data, real_dataspec)
+                    
+                    import base64
+                    try:
+                        if isinstance(raw_data, bytes):
+                            raw_bytes = raw_data
+                        else:
+                            raw_bytes = str(raw_data).encode('utf-8', errors='replace')
+                        safe_raw = base64.b64encode(raw_bytes[:2000]).decode('ascii')
+                    except Exception:
+                        safe_raw = "[encoding error]"
+                    
+                    payload = {
+                        "race_id": race_key[:16],  # Use full race key as ID
+                        "data_type": real_dataspec, # Use Correct Data Type
+                        "race_date": date_str,
+                        "content": json.dumps(parsed_data, ensure_ascii=False),
+                        "raw_string": safe_raw,
+                    }
+                    
+                    try:
+                        json_data = json.dumps(payload, ensure_ascii=True)
+                        json_bytes = json_data.encode('ascii')
+                        
+                        url = f"{self.supabase_url}/rest/v1/raw_race_data"
+                        
+                        req = urllib.request.Request(
+                            url,
+                            data=json_bytes,
+                            headers={
+                                "Content-Type": "application/json",
+                                "apikey": self.supabase_key,
+                                "Authorization": f"Bearer {self.supabase_key}",
+                                "Prefer": "resolution=merge-duplicates"
+                            },
+                            method="POST"
+                        )
+                        
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            if resp.status in (200, 201):
+                                uploaded += 1
+                                
+                    except Exception:
+                        pass
+                        
+            except Exception:
+                break
+        
+        self.jv.JVClose()
+        return uploaded
+
     def run(self, target_date: datetime.date = None):
-        """Main execution"""
+        """Main execution - Two-phase collection for odds data"""
         if target_date is None:
             target_date = datetime.date.today()
         
+        date_str = target_date.strftime("%Y%m%d")
         print(f"\n[TARGET DATE] {target_date}")
         
-        # Collect all data types
-        # 0B15: 速報レース情報(出走馬名表～) - works with key=YYYYMMDD
-        # Verified working in JV-Link verification tool
-        specs = [
-            ("0B15", "Race Card (速報レース情報)"),
-            ("0B31", "Tan/Fuku Odds (単複オッズ)"),
-            ("0B32", "Ren Odds (連勝オッズ)"),
-        ]
-        
         total_uploaded = 0
-        for spec, name in specs:
-            uploaded = self.fetch_and_upload(spec, target_date)
-            total_uploaded += uploaded
+        race_keys = set()
         
-        # Log completion (skip detailed logging for now)
-        print(f"[OK] Data Collection Complete: {total_uploaded} records")
+        # Phase 1: Fetch 0B15 (Race Card) with date key - also collect race keys
+        print(f"\n>> Phase 1: Fetching 0B15 (Race Card)...")
+        uploaded_0b15 = self.fetch_and_upload("0B15", target_date)
+        total_uploaded += uploaded_0b15
+        
+        # Query Supabase to get unique race IDs for today
+        try:
+            url = f"{self.supabase_url}/rest/v1/raw_race_data"
+            req = urllib.request.Request(
+                f"{url}?select=race_id&data_type=eq.0B15&race_date=eq.{date_str}",
+                headers={
+                    "apikey": self.supabase_key,
+                    "Authorization": f"Bearer {self.supabase_key}",
+                },
+                method="GET"
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                for row in data:
+                    rid = row.get('race_id', '')
+                    # Extract race key (first 16 chars: YYYYMMDDJJKKHHRR)
+                    if rid and len(rid) >= 16:
+                        race_keys.add(rid[:16])
+        except Exception as e:
+            print(f"[WARN] Could not fetch race list: {e}")
+        
+        print(f"   Found {len(race_keys)} unique races for {date_str}")
+        
+        # Phase 2: Fetch 0B31/0B32 for each race
+        if race_keys:
+            print(f"\n>> Phase 2: Fetching odds for each race...")
+            
+            for dataspec, desc in [("0B31", "Tan/Fuku Odds"), ("0B32", "Ren Odds")]:
+                spec_uploaded = 0
+                for i, race_key in enumerate(sorted(race_keys)):
+                    uploaded = self.fetch_odds_by_race(dataspec, race_key, date_str)
+                    spec_uploaded += uploaded
+                    if uploaded > 0:
+                        print(f"   {dataspec}: {race_key} -> {uploaded} records", end="\r")
+                
+                print(f"\n   >> {dataspec}: {spec_uploaded} records uploaded.")
+                total_uploaded += spec_uploaded
         
         print(f"\n{'='*50}")
         print(f"[DONE] Total {total_uploaded} records uploaded.")

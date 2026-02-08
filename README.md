@@ -46,5 +46,9 @@ The "Brain" of the system, running on your local Windows PC to bypass data restr
    print(results)
    ```
 
+## 📚 Documentation
+- [System Requirements](docs/REQUIREMENTS.md)
+- [System Specifications & Architecture](docs/SPECIFICATIONS.md)
+
 ## 🔄 Deployment
 See `deploy_to_github.bat` for pushing updates.
